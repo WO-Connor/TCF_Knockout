@@ -30,7 +30,7 @@ Sets active identity to clusters, and finds markers that separate each cluster f
 Reads in 5 sets of cell type markers from [MacParland](https://www.nature.com/articles/s41467-018-06318-7#Sec16), [Aizarani](https://www.nature.com/articles/s41586-019-1373-2#data-availability), [Halpern](https://www.embopress.org/doi/full/10.15252/msb.20209682), and [Zhu](). Performs geneset_marker_overlap.f() on each dataset.
 
 ### Chunk 11: module_expression
-Creates and saves dot plots for each set of cell type markers using cumulative expression scores for each cluster and cell type. Expression scores are calculated using AddModuleScore() and account for cell complexity by averaging expression of control genes and comparing to the set of interest (https://www.waltermuskovic.com/2021/04/15/seurat-s-addmodulescore-function/). 
+Creates and saves dot plots for each set of cell type markers using cumulative expression scores for each cluster and cell type. Expression scores are calculated using AddModuleScore() and account for cell complexity by averaging expression of control genes and comparing to the set of interest [Explanation](https://www.waltermuskovic.com/2021/04/15/seurat-s-addmodulescore-function/). 
 
 ### Chunk 12: cell_type_assignment
 After manually obtaining a consensus cell type assignment list from the results of chunks 9 and 10, creates a new metadata category for cell type and plots and saves UMAP with labels by cell type.
