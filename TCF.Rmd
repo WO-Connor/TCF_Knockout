@@ -1,0 +1,639 @@
+---
+title: "TCF"
+output: html_document
+date: "2023-07-06"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(future.globals.maxSize = 800000 * 1024^2, future.seed = TRUE)
+set.seed(1234)
+suppressPackageStartupMessages(library(Matrix))
+suppressPackageStartupMessages(library(Seurat))
+suppressPackageStartupMessages(library(SingleCellExperiment))
+suppressPackageStartupMessages(library(tidyverse))
+suppressPackageStartupMessages(library(yaml))
+suppressPackageStartupMessages(library(scDblFinder))
+suppressPackageStartupMessages(library(BiocParallel))
+suppressPackageStartupMessages(library(scuttle))
+suppressPackageStartupMessages(library(scater))
+suppressPackageStartupMessages(library(stringr))
+suppressPackageStartupMessages(library(openxlsx))
+```
+
+# Functions
+
+```{r general_functions}
+# much faster `merge` on matrices (assumes `by = "row.names"`)
+merge.matrices <- function (x,y) {
+  xy.names <- union(row.names(x),row.names(y))
+  missing.x <- setdiff(row.names(y),row.names(x))
+  x <- rbind(x,`row.names<-`(matrix(0,nrow = length(missing.x),ncol = ncol(x)),missing.x))
+  missing.y <- setdiff(row.names(x),row.names(y))
+  y <- rbind(y,`row.names<-`(matrix(0,nrow = length(missing.y),ncol = ncol(y)),missing.y))
+  return(cbind2(x[xy.names,],y[xy.names,]))
+}
+```
+
+# Load and consolidate data
+
+```{r load_data}
+# import sample data 
+samples <- normalizePath(dir("Chromium-SC3Pv3",full.names=T))
+samples <- samples[c(1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20)]
+print(samples)
+
+names(samples) <- basename(samples)
+nonexistant <- !dir.exists(samples)
+samples <- samples[!nonexistant]
+if (length(samples) == 0) stop("No valid samples. Nothing to do.")
+
+# load in barcodes
+barcode.files <- file.path(samples,"counts_cellbender.barcodes.txt")
+names(barcode.files) <- names(samples)
+nonexistant <- !file.exists(barcode.files)
+samples <- samples[!nonexistant]
+if (length(samples) == 0) stop("No valid samples. Nothing to do.")
+barcodes <- barcode.files %>%
+  lapply(readr::read_lines) %>%
+  purrr::imap(~ sprintf("%s.%s",.y,.x))
+
+# load in features
+feature.files <- file.path(samples,"counts_cellbender.features.txt")
+names(feature.files) <- names(samples)
+nonexistant <- !file.exists(feature.files)
+samples <- samples[!nonexistant]
+if (length(samples) == 0) stop("No valid samples. Nothing to do.")
+features <- feature.files %>%
+  lapply(readr::read_lines)
+
+# load in counts
+count.files <- file.path(samples,"counts_cellbender.mtx.gz")
+names(count.files) <- names(samples)
+nonexistant <- !file.exists(count.files)
+samples <- samples[!nonexistant]
+if (length(samples) == 0) stop("No valid samples. Nothing to do.")
+counts <- count.files %>%
+  lapply(Matrix::readMM) %>%
+  purrr::imap(~ `colnames<-`(.x,barcodes[[.y]])) %>%
+  purrr::imap(~ `row.names<-`(.x,features[[.y]])) %>%
+  purrr::reduce(merge.matrices)
+
+# load in metadata
+metadata.files <- file.path(samples,"sample.yaml")
+names(metadata.files) <- names(samples)
+nonexistant <- !file.exists(metadata.files)
+samples <- samples[!nonexistant]
+if (length(samples) == 0) stop("No valid samples. Nothing to do.")
+barcodes <- barcodes %>%
+  purrr::imap(~ data.frame(hashtag = .y,cell = .x)) %>%
+  plyr::ldply(.id = "hashtag")
+metadata <- metadata.files %>%
+  lapply(yaml::read_yaml) %>%
+  lapply(data.frame,stringsAsFactors = FALSE) %>%
+  plyr::ldply(.id = "name") %>%
+  dplyr::rename("hashtag" = "name") %>%
+  dplyr::right_join(barcodes,by = "hashtag") %>%
+  dplyr::mutate(sample = stringr::str_remove(hashtag,"[A-Z]$")) %>%
+  dplyr::select(cell,sample,hashtag,tidyselect::everything()) %>%
+  tibble::column_to_rownames("cell")
+n.grid <- ceiling(sqrt(length(unique(metadata$sample))))
+```
+
+# Create Seurat Objects and QC
+
+```{r seurat_obj_plus_QC}
+# build object
+seurat_obj <- counts %>%
+  SeuratObject::CreateSeuratObject(project = "Core-Biddinger",meta.data = metadata, min.cells=3, min.features=200) %>%
+  Seurat::PercentageFeatureSet(pattern = "^[Mm][Tt]-",col.name = "mt.percent")
+
+# no doublets
+sce <- as.SingleCellExperiment(seurat_obj)
+sce <- scDblFinder(sce, 
+                   samples=sce$orig.ident,
+                   BPPARAM=SnowParam(8, RNGseed=1234))
+
+single_cell_results <- sce$scDblFinder.class
+seurat_obj@meta.data$scdbl <- single_cell_results
+filtered_seurat <- subset(x = seurat_obj, 
+                         subset= (nFeature_RNA > 500) & 
+                           (mt.percent <= 2) & 
+                           (scdbl=='singlet'))
+```
+
+# SCTransform, Integration, and Clustering
+
+```{r integration_fns}
+normalize_integrate <- function(seurat_obj, rgrslist, nfeat){
+  split_seurat <- SplitObject(seurat_obj, split.by = "sample")
+
+  for (i in 1:length(split_seurat)) {
+     split_seurat[[i]] <- SCTransform(split_seurat[[i]], vars.to.regress = rgrslist, vst.flavor = "v2")
+  }
+
+  integ_features <- SelectIntegrationFeatures(object.list = split_seurat, nfeatures = nfeat)
+
+  split_seurat <- PrepSCTIntegration(object.list = split_seurat, anchor.features = integ_features)
+
+  integ_anchors <- FindIntegrationAnchors(object.list = split_seurat, normalization.method = "SCT", anchor.features = integ_features) # 15-20 mins
+  rm(seurat_obj)
+  seurat_integrated <- IntegrateData(anchorset = integ_anchors, normalization.method = "SCT")
+  return(seurat_integrated)
+}
+postintegrate <- function(seurat_obj, pcadim, rsltn){
+  seurat_obj <- RunPCA(object = seurat_obj)
+  seurat_obj <- RunUMAP(seurat_obj, dims = 1:pcadim,reduction = "pca")
+  seurat_obj <- FindNeighbors(object = seurat_obj, dims = 1:pcadim)
+  seurat_obj <- FindClusters(object = seurat_obj,resolution = c(rsltn))
+  return(seurat_obj)
+}
+```
+
+```{r integrate}
+seurat_integrated <- normalize_integrate(filtered_seurat,c("nCount_RNA","nFeature_RNA"),3000)
+seurat_integrated <- postintegrate(seurat_integrated,12,0.15)
+```
+
+## Visualize Clusters
+
+```{r visualize_clusters}
+DimPlot(seurat_integrated,reduction = "umap",label = TRUE,label.size = 6)
+DimPlot(seurat_integrated,label = TRUE, split.by = "perturbation")  + NoLegend()
+DimPlot(seurat_integrated,label = TRUE, split.by = "sample",ncol = 3)  + NoLegend()
+
+seurat_integrated <- CellCycleScoring(
+     seurat_integrated,
+     s.features = str_to_title(cc.genes$s.genes),
+     g2m.features = str_to_title(cc.genes$g2m.genes),
+     assay = 'RNA',
+     set.ident = TRUE)
+
+Idents(seurat_integrated) <- "seurat_clusters"
+DimPlot(seurat_integrated, 
+        label = TRUE, split.by = "Phase",ncol = 3)  + NoLegend()
+
+# metrics <-  c("mt.percent", "nCount_RNA", "nFeature_RNA", "S.Score", "G2M.Score")
+# FeaturePlot(seurat_integrated,
+#             reduction = "umap",
+#             features = metrics,
+#             pt.size = 0.4,
+#             order = TRUE,
+#             min.cutoff = 'q10')
+
+```
+
+# Cell Type Assignment
+
+```{r cell_type_functions}
+geneset_marker_overlap.f <- function(SerObj, enrichedGenes_df, known_markers, FC_thresh = 0, projname = 'proj', w = NULL, h = NULL, facet_ncol = 5, save_plot = T) {
+
+  ### Loop through each cluster and calculate the percentage of genes from each cell type in that cluster
+  #     above the FC_thresh using the output from finding highly enriched markers of each cluster
+  overlap_df <- data.frame()
+  for (i in sort(unique(Idents(SerObj)))) {
+    cat(paste0('\nCalculating geneset percentages for cluster ', i, '...'))
+    df_tmp <- enrichedGenes_df %>%
+      filter(cluster == i) %>%
+      filter(avg_log2FC > FC_thresh)
+
+    for (t in unique(sort(known_markers$type))) {
+
+      cell_type_markers <- known_markers %>%
+        filter(type == t) %>%
+        pull(gene) %>%
+        unique() %>%
+        as.vector()
+
+      per <- length(intersect(df_tmp$gene, cell_type_markers)) / length(cell_type_markers) * 100
+      genes <- intersect(df_tmp$gene, cell_type_markers)
+
+      overlap_df <- bind_rows(overlap_df, data.frame('Cluster' = i,
+                                                     'Type' = t,
+                                                     'Percent' = round(per, 2),
+                                                     'Overlap_genes' = paste(genes, collapse = '|'),
+                                                     'number_of_cluster_markers' = length(df_tmp$gene)))
+    }
+  }
+  cat('\n\n')
+  
+  ### Reformat the dataframe to be easier to read, write to csv, and return
+  overlap_df %>%
+    dplyr::select(Cell_Type = Type, everything()) %>%
+    write_csv(paste0(projname, '_FC', FC_thresh, '.csv'))
+
+  ### Refactor cluster so appear in numerical order
+  overlap_df <- overlap_df %>%
+    mutate(Cluster = factor(Cluster, levels = unique(Cluster)))
+
+  ### Create a bar plot to show the percent cell type cells present in each cluster
+  overlap_df <- overlap_df %>%
+    mutate(facet_name = paste0(Cluster, " (", number_of_cluster_markers, ")"))
+
+  overlap_df$facet_name <- reorder(overlap_df$facet_name, as.numeric(overlap_df$Cluster))
+
+  # Plot
+  g <- ggplot(overlap_df, aes(Type, Percent, alpha = Percent)) +
+          geom_bar(stat = 'identity', color = 'black') +
+          facet_wrap(~facet_name, ncol = facet_ncol, scales = 'free_y') +
+          scale_x_discrete(NULL) +
+          theme_bw() +
+          theme(text = element_text(size = 20),
+
+                axis.title = element_text(size = 18, face = 'bold'),
+                axis.text.y = element_text(size = 16, color = 'black'),
+                axis.text.x = element_text(size = 16, color = 'black', angle = 90, hjust = 1, vjust = .5),
+
+                strip.text = element_text(face = 'bold'),
+
+                panel.grid = element_blank())
+  
+  if (save_plot == T) {
+      filename = paste0(projname, '_FC', FC_thresh, '.png')
+      print(paste0('Saving percent image as: ', filename))
+
+
+
+  # Determine width and height
+  if (is.null(w)) {
+    w = min(10, length(unique(overlap_df$Cluster)) * 1.75 + 3)
+  }
+
+  if (is.null(h)) {
+    h = max(3, 2 * ceiling(length(unique(overlap_df$Cluster)) / 5))
+  }
+      ggsave(filename, g, width = w, height = h)
+  }
+  return(g)
+}
+```
+
+```{r find_markers}
+Idents(seurat_integrated) <- "seurat_clusters"
+proj_name <- "TCF_Knockout"
+#seurat_integrated <- readRDS('seurat_integrated.rds')
+markers <- FindAllMarkers(seurat_integrated, 
+                          min.pct = -Inf, 
+                          logfc.threshold = .5, 
+                          only.pos = T, 
+                          test.use = "MAST",
+                          latent.vars = c('mt.percent', 'nFeature_RNA'))
+markers <- markers %>%
+  filter(avg_log2FC > 0) %>%
+  write_csv(paste0(proj_name, '_HighlyEnrichedMarkers_logFC.5.csv'))
+markers
+```
+
+## Determine and assign cell type
+
+### Overlap of cluster markers with markers of known cell types
+
+This is a custom function the checks the percent overlap between a marker gene list of a certain cell type with the markers of each cluster (as determined by the FindMarkers function).
+
+```{r cell_type_markers}
+proj_name <- "TCF_Knockout"
+markers <- read_csv(paste0(proj_name, '_HighlyEnrichedMarkers_logFC.5.csv'))
+dir.create("cell_type_assignment")
+cell_marker_dir <- "cell_marker_lists/"
+
+## MacParland
+cell_markers <- read_csv(paste0(cell_marker_dir, "MacParland_Liver_cellTypeSubmarkers.csv"))
+
+geneset_marker_overlap.f(seurat_integrated,
+                         markers,
+                         cell_markers,
+                         FC_thresh = .5, 
+                         projname = paste0("cell_type_assignment/", proj_name, '_CTA_MacParland'))
+
+
+# Aizarani list
+cell_markers <- read_csv(paste0(cell_marker_dir, "2019_Aizarani_fig1d.csv"))
+
+geneset_marker_overlap.f(seurat_integrated,
+                         markers,
+                         cell_markers,
+                         FC_thresh = .5, 
+                         projname = paste0("cell_type_assignment/", proj_name, '_CTA_Aizarani'))
+
+
+# Zhu list
+cell_markers <- read_csv(paste0(cell_marker_dir, "2019_Zhu.csv"))
+
+geneset_marker_overlap.f(seurat_integrated,
+                         markers,
+                         cell_markers,
+                         FC_thresh = .5, 
+                         projname = paste0("cell_type_assignment/", proj_name, '_CTA_Zhu'))
+
+
+# Halpern list
+cell_markers <- read_csv(paste0(cell_marker_dir, "Halpern_pairedcell_fig1.csv"))
+
+geneset_marker_overlap.f(seurat_integrated,
+                         markers,
+                         cell_markers,
+                         FC_thresh = .5, 
+                         projname = paste0("cell_type_assignment/", proj_name, '_CTA_Halpern'))
+
+
+# Activated Portal fibroblasts/myofibroblasts
+cell_markers <- data.frame(type = "portal fibroblasts", gene = c("Thy1", "Fbln2", "Msln", "Eln", "Grem1", "Cd73", "Col15a1", "Aspn"))
+
+geneset_marker_overlap.f(seurat_integrated,
+                         markers,
+                         cell_markers,
+                         FC_thresh = .5, 
+                         projname = paste0("cell_type_assignment/", proj_name, '_CTA_PF'))
+
+
+```
+
+### Cumulative expression of cell type marker list across clusters
+
+For a list of cell type markers, calculate a expression score for each cluster. An in-depth explaination of what is happening in the AddModuleScore function can be found in a [blog post by Walter Muskovic](https://www.waltermuskovic.com/2021/04/15/seurat-s-addmodulescore-function/).
+
+```{r module_expression}
+seurat_tmp <- seurat_integrated
+DefaultAssay(seurat_tmp) <- "RNA"
+## MacParland
+cell_markers <- read_csv("cell_marker_lists/MacParland_Liver_cellTypeSubmarkers.csv")
+
+goi_li <- split(cell_markers$gene, cell_markers$type)
+seurat_tmp <- AddModuleScore(object = seurat_tmp, features = goi_li, name = "MarkerList")
+
+macparland_plot <- DotPlot(seurat_tmp, features = paste0("MarkerList", seq(1, length(goi_li)))) +  
+                            scale_x_discrete(NULL,
+                            labels = names(goi_li)) +
+                        theme(axis.text.x = element_text(angle = 90, vjust = .5, hjust = 1))
+
+ggsave(paste0("cell_type_assignment/", proj_name, "_DP-CTA_MacParland.png"), macparland_plot, units = "in", width = 2 + length(goi_li) * .75, height = 8)
+
+## Aizarani
+cell_markers <- read_csv("cell_marker_lists/2019_Aizarani_fig1d.csv")
+
+goi_li <- split(cell_markers$gene, cell_markers$type)
+seurat_tmp <- AddModuleScore(object = seurat_tmp, features = goi_li, name = "MarkerList",search=TRUE)
+
+aizarani_plot <- DotPlot(seurat_tmp, features = paste0("MarkerList", seq(1, length(goi_li)))) + 
+                        scale_x_discrete(NULL,
+                        labels = names(goi_li)) +
+                      theme(axis.text.x = element_text(angle = 90, vjust = .5, hjust = 1))
+
+ggsave(paste0("cell_type_assignment/", proj_name, "_DP-CTA_Aizarani.png"), aizarani_plot, units = "in", width = 2 + length(goi_li) * .75, height = 8)
+
+## Zhu
+cell_markers <- read_csv("cell_marker_lists/2019_Zhu.csv")
+
+goi_li <- split(cell_markers$gene, cell_markers$type)
+seurat_tmp <- AddModuleScore(object = seurat_tmp, features = goi_li, name = "MarkerList")
+
+zhu_plot <- DotPlot(seurat_tmp, features = paste0("MarkerList", seq(1, length(goi_li)))) + 
+                    scale_x_discrete(NULL,
+                   labels = names(goi_li)) +
+                   theme(axis.text.x = element_text(angle = 90, vjust = .5, hjust = 1))
+
+ggsave(paste0("cell_type_assignment/", proj_name, "_DP-CTA_Zhu.png"), zhu_plot, units = "in", width = 2 + length(goi_li) * .75, height = 8)
+
+## Halpern
+cell_markers <- read_csv("cell_marker_lists/Halpern_pairedcell_fig1.csv")
+
+goi_li <- split(cell_markers$gene, cell_markers$type)
+seurat_tmp <- AddModuleScore(object = seurat_tmp, features = goi_li, name = "MarkerList")
+
+halpern_plot <- DotPlot(seurat_tmp, features = paste0("MarkerList", seq(1, length(goi_li)))) + 
+                        scale_x_discrete(NULL,
+                         labels = names(goi_li)) +
+                        theme(axis.text.x = element_text(angle = 90, vjust = .5, hjust = 1))
+
+ggsave(paste0("cell_type_assignment/", proj_name, "_DP-CTA_Halpern.png"), halpern_plot, units = "in", width = 2 + length(goi_li) * .75, height = 8)
+
+# Activated Portal fibroblasts/myofibroblasts
+cell_markers <- data.frame(type = "portal fibroblasts", gene = c("Thy1", "Fbln2", "Msln", "Eln", "Grem1", "Cd73", "Col15a1", "Aspn"))
+
+goi_li <- split(cell_markers$gene, cell_markers$type)
+seurat_tmp <- AddModuleScore(object = seurat_tmp, features = goi_li, name = "MarkerList") 
+
+fibroblast_plot <- DotPlot(seurat_tmp, features = paste0("MarkerList", seq(1, length(goi_li)))) + 
+                    scale_x_discrete(NULL,
+                   labels = names(goi_li)) +
+                    theme(axis.text.x = element_text(angle = 90, vjust = .5, hjust = 1))
+
+ggsave(paste0("cell_type_assignment/", proj_name, "_DP-CTA_PF.png"), fibroblast_plot, units = "in", width = 2 + length(goi_li) * .75, height = 8)
+
+```
+
+### Assign cell types
+
+Based on the results of the overlap analysis and the module expression scores, we can assign cell types. This is curated manually and saved as a <name>\_cluster_assignment.csv file.
+
+```{r cell_type_assignment}
+proj_name <- "TCF_Knockout"
+cluster_assn <- read_csv(paste0(proj_name, '_cluster_assignment.csv'))
+cluster_assn <- cluster_assn%>%
+  mutate(cluster_assignment = paste(cluster_assn$Cluster, cluster_assn$Assignment, sep = "_"))
+
+Idents(seurat_integrated) <- "seurat_clusters"
+
+seurat_integrated[["cluster_id_named"]] <- plyr::mapvalues(Idents(seurat_integrated),
+                                                    from=cluster_assn$Cluster,
+                                                    to=cluster_assn$cluster_assignment)
+
+new.cluster.ids <- cluster_assn$Assignment
+
+names(new.cluster.ids) <- levels(seurat_integrated)
+seurat_integrated <- RenameIdents(seurat_integrated, new.cluster.ids)
+
+seurat_integrated[["cluster_named"]] <- Idents(seurat_integrated)
+
+
+cluster_named_plot <- DimPlot(seurat_integrated, reduction = "umap", label = TRUE, pt.size = 0.5) + NoLegend() 
+cluster_named_plot
+
+ggsave(paste0(proj_name, "_umap_clusterNamed.png"), cluster_named_plot, units = 'in', width = 6, height = 6, dpi = 250)
+
+
+# Save a cluster named and a cluster named without immune
+#saveRDS(seurat_integrated, paste0(proj_name, '_seurat-integrated.rds'))
+```
+
+# Feature Plots
+
+```{r feature_plots}
+#seurat_integrated <- readRDS(paste0(proj_name,'_seurat-integrated.rds'))
+genes <- read_csv("pp_vs_pc.csv")
+DefaultAssay(seurat_integrated) <- "RNA"
+FeaturePlot(seurat_integrated, 
+            reduction = "umap", 
+            features = genes$Periportal[1:6],
+            pt.size = 0.2, 
+            order = TRUE,
+            min.cutoff = 'q10',
+            ncol = 2,
+            label = FALSE)
+FeaturePlot(seurat_integrated, 
+            reduction = "umap", 
+            features = genes$Periportal[7:13],
+            pt.size = 0.2, 
+            order = TRUE,
+            min.cutoff = 'q10',
+            ncol = 2,
+            label = FALSE)
+FeaturePlot(seurat_integrated, 
+            reduction = "umap", 
+            features = genes$Pericentral[1:6],
+            pt.size = 0.2, 
+            order = TRUE,
+            min.cutoff = 'q10',
+            ncol = 2,
+            label = FALSE)
+FeaturePlot(seurat_integrated, 
+            reduction = "umap", 
+            features = genes$Pericentral[7:12],
+            pt.size = 0.2, 
+            order = TRUE,
+            min.cutoff = 'q10',
+            ncol = 2,
+            label = FALSE)
+```
+
+# Perform DPT calculation
+
+```{r load_hep_data}
+#seurat_integrated <- readRDS("TCF_Knockout_seurat-integrated.rds")
+hepatocyte_obj <- subset(x = seurat_integrated, subset = `seurat_clusters` ==  c('0'))
+saveRDS(hepatocyte_obj,"hepatocyte_obj.rds")
+```
+
+```{r do_dpt}
+dm <- DiffusionMap(Embeddings(hepatocyte_obj, "pca")[,1:12])
+dpt <- DPT(dm)
+
+hepatocyte_obj$dpt <- rank(dpt$dpt)
+dpt_vals <- hepatocyte_obj$dpt
+
+hepatocyte_obj$dpt <- ((dpt_vals)/max(dpt_vals))*8+1
+
+meta <- hepatocyte_obj@meta.data
+
+tmp <- data.frame(DC1 = eigenvectors(dm)[, 1],
+                  DC2 = eigenvectors(dm)[, 2],
+                  DC3 = eigenvectors(dm)[, 3],
+                  DC4 = eigenvectors(dm)[, 4],
+                  cluster = hepatocyte_obj$seurat_clusters,
+                  dpd = dpt_vals)
+
+dc_scatter_by_dpd <- ggplot(tmp, aes(x = DC1, y = DC2, colour = dpd)) + geom_point() + 
+                            xlab("DC 1") + ylab("DC 2") + theme_few()
+dc_scatter_by_cluster <- ggplot(tmp, aes(x = DC1, y = DC2, colour=cluster)) + geom_point() +
+                            xlab("DC 1") + ylab("DC 2") + theme_few()
+dc_scatter_by_cluster
+dc_scatter_by_dpd
+```
+
+# DPT Plots: KO vs. WT
+
+```{r one_gene_dpt_fn}
+plot_gene_dpt_solo <- function(seurat_obj, gene) {
+  seurat_obj <- SplitObject(seurat_obj, split.by = "perturbation")
+  metaKO <- seurat_obj$KO@meta.data
+  exp_df_KO <- seurat_obj$KO@assays$RNA@data[gene,] %>% as.matrix() %>% t() %>% as.data.frame()
+  exp_df_KO <- t(exp_df_KO)
+  dfKO <- merge(metaKO, exp_df_KO, by = 0)
+  fittedKO <- ggplot(dfKO, aes(dpt, V1)) + geom_smooth(se = F, method = "loess")
+
+  metaWT <- seurat_obj$WT@meta.data
+  exp_df_WT <- seurat_obj$WT@assays$RNA@data[gene,] %>% as.matrix() %>% t() %>% as.data.frame()
+  exp_df_WT <- t(exp_df_WT)
+  dfWT <- merge(metaWT, exp_df_WT, by = 0)
+  fittedWT <- ggplot(dfWT, aes(dpt, V1)) + geom_smooth(se = F, method = "loess")
+
+  plot_dataKO <- ggplot_build(fittedKO)$data[[1]]
+  plot_dataWT <- ggplot_build(fittedWT)$data[[1]]
+
+  lbls <- c()
+  for(i in 1:9){
+    if(i%%1 == 0){lbls <- append(lbls,i)}
+    else if(i%%1==0){lbls <- append(lbls,"")}}
+
+  plot_data <- plot_dataKO %>%  mutate(Type = 'Knockout') %>% bind_rows(plot_dataWT %>% mutate(Type = 'Wild Type'))
+  full_plot <- ggplot(data = plot_data, aes(x=x, y=y, group_by(Type))) + geom_line(aes(linetype=Type)) + scale_y_continuous('Expression') + scale_x_continuous("Diffusion pseudodistance", breaks = seq(1,9,by=1), labels=lbls)  + theme(plot.title=element_text(hjust=0.5)) +  ggtitle(gene) + theme_few()
+  
+  return(full_plot)
+}
+```
+
+```{r list_genes_dpt_fn}
+plot_gene_dpt_list <- function(seurat_obj, genelist){
+  for (gene in genelist){
+    p1 <- plot_gene_dpt_solo(seurat_obj,gene)
+    plot(p1)
+  }
+}
+```
+
+```{r plot_dpt}
+plot_gene_dpt_list(hepatocyte_obj,genes$Pericentral[!genes$Pericentral%in%c("Axin","Gpr49",NA)])
+plot_gene_dpt_list(hepatocyte_obj,genes$Periportal)
+```
+
+# DPT Plots: Cumulative PC and Cumulative PP
+
+```{r cumulative_dpt_fn}
+plot_gene_dpt_cumulative <- function(seurat_obj, genelist,title) {
+  seurat_obj <- SplitObject(seurat_obj, split.by = "perturbation")
+  metaKO <- seurat_obj$KO@meta.data
+  exp_dfKO <- data.frame(matrix(ncol = 0, nrow = length(seurat_obj$KO@assays$RNA@data[genelist[1],])))
+  range <- 1:length(genelist)
+  for (i in range){
+    if(i==1){
+      exp_dfKO <- seurat_obj$KO@assays$RNA@data[genelist[i],] %>% as.matrix() %>% as.data.frame()
+    }
+  else{
+    exp_dfKO[genelist[i]] <- seurat_obj$KO@assays$RNA@data[genelist[i],] %>% as.matrix() %>% as.data.frame()
+    }
+  }
+  exp_dfKO["cumulative"] <- rowSums(exp_dfKO)
+  sumsKO <- exp_dfKO["cumulative"]
+  dfKO <- merge(metaKO, sumsKO, by = 0)
+  fittedKO <- ggplot(dfKO, aes(dpt, cumulative)) + geom_smooth(se = F, method = "loess")
+  plot_dataKO <- ggplot_build(fittedKO)$data[[1]]
+  
+  metaWT <- seurat_obj$WT@meta.data
+  exp_dfWT <- data.frame(matrix(ncol = 0, nrow = length(seurat_obj$WT@assays$RNA@data[genelist[1],])))
+  range <- 1:length(genelist)
+  for (i in range){
+    if(i==1){
+      exp_dfWT <- seurat_obj$WT@assays$RNA@data[genelist[i],] %>% as.matrix() %>% as.data.frame()
+    }
+  else{
+    exp_dfWT[genelist[i]] <- seurat_obj$WT@assays$RNA@data[genelist[i],] %>% as.matrix() %>% as.data.frame()
+    }
+  }
+  exp_dfWT["cumulative"] <- rowSums(exp_dfWT)
+  sumsWT <- exp_dfWT["cumulative"]
+  dfWT <- merge(metaWT, sumsWT, by = 0)
+  fittedWT <- ggplot(dfWT, aes(dpt, cumulative)) + geom_smooth(se = F, method = "loess")
+  plot_dataWT <- ggplot_build(fittedWT)$data[[1]]
+  
+  lbls <- c()
+  for(i in 1:9){
+    if(i%%3 == 0){lbls <- append(lbls,i)}
+    else if(i%%1==0){lbls <- append(lbls,"")}}
+  brks <- c()
+  for(i in 1:9){
+    if(i%%1 == 0){brks <- append(brks,i)}
+  }
+  plot_data <- plot_dataKO %>%  mutate(Type = 'Knockout') %>% bind_rows(plot_dataWT %>% mutate(Type = 'Wild Type'))
+  
+  full_plot <- ggplot(plot_data, aes(x=x, y=y, group_by(Type))) + 
+    geom_line(aes(linetype=Type)) +
+    scale_y_continuous('Expression') +
+    scale_x_continuous("Diffusion pseudodistance", breaks = brks, labels=lbls) + theme_few() + ggtitle(title) + theme(plot.title=element_text(hjust=0.5))
+  return(full_plot)
+}
+```
+
+```{r plot_cumulative_dpt}
+plot_gene_dpt_cumulative(hepatocyte_obj,genes$Pericentral[!genes$Pericentral%in%c("Axin","Gpr49",NA)],"Pericentral")
+plot_gene_dpt_cumulative(hepatocyte_obj,genes$Periportal,"Periportal")
+```
