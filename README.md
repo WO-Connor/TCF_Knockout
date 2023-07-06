@@ -2,9 +2,9 @@
 
 ## TCF_1
 ### Chunk 1: functions
-merge.matrices() - 
+merge.matrices() - merges matrices by row names
 
-group.split() - 
+group.split() - ??not needed??
 
 ### Chunk 2: load_data
 Load in first 20 samples from Chromium-SC3Pv3, and for each sample load cell barcodes, gene ids (features), counts, and metadata.
@@ -16,7 +16,7 @@ Create a Seurat object from data, calculate the percentage of genes that come fr
 Normalize the data with SCTransform across samples, counts, and genes. Integrate, run PCA and UMAP, and cluster. Plot UMAP with labels by cluster.
 
 ### Chunk 5: visualize_clusters
-Plot UMAP by perturbation and sample and calculate and plot UMAP by cell cycle based on markers for G2M and S phases. Optionally create feature plots for mitochondrial percentage, number of transcripts, number of genes, and G2M and S scores.
+Plot UMAP by perturbation and sample and calculate and plot UMAP by cell cycle based on markers for G2M and S phases. Optionally create feature plots for mitochondrial percentage, number of transcripts, number of genes, and G2M and S scores with UMAP reductions.
 
 ### Chunk 6: diff_eq
 ????
@@ -42,7 +42,17 @@ After manually obtaining a consensus cell type assignment list from the results 
 ### Chunk 4: do_dpt
 ### Chunk 5: scatter_plots
 ### Chunk 6: feature_plots
+Plots feature plots of pericentral and periportal gene expression using UMAP reductions.
+
 ### Chunk 7: one_gene_dpt
+plot_gene_dpt_solo() - Splits Seurat object by perturbation and calculates a line of best fit for normalized expression as it relates to diffusion pseudotime using loess for knockout and wild genotypes. 
+
 ### Chunk 8: list_genes_dpt
+plot_gene_dpt_list() - Runs plot_gene_dpt_solo() for a given list of genes on a given object
+
 ### Chunk 9: plot_dpt
+Runs plot_gene_dpt_list() on the hepatocyte object for pericentral and periportal marker lists, and Axin and Gpr49 are excluded due to not being in the hepatocyte object.
+
 ### Chunk 10 & 11: cumulative_dpt & plot_cumulative_dpt
+plot_gene_dpt_cumulative() - Given a Seurat object, genelist, and title, create a DPT trace of the sum of all expressions of the genes in the list.
+Plots cumulative normalized expression for lists of pericentral and periportal markers, with Axin and Gpr49 excluded due to not being in the hepatocyte object.
