@@ -27,7 +27,7 @@ geneset_marker_overlap.f() - Calculates geneset marker overlap, including the pe
 Sets active identity to clusters, and finds markers that separate each cluster from the rest using MAST and with a logFC threshold of 0.5. Filters these markers to eliminate any downregulated genes (average log2FC value of 0 or less). 
 
 ### Chunk 10: cell_type_markers
-Reads in 5 sets of cell type markers from ***, ***, ***, and ***. Performs geneset_marker_overlap.f() on each dataset.
+Reads in 5 sets of cell type markers from [MacParland](https://www.nature.com/articles/s41467-018-06318-7#Sec16), [Aizarani](https://www.nature.com/articles/s41586-019-1373-2#data-availability), [Halpern](https://www.embopress.org/doi/full/10.15252/msb.20209682), and [Zhu](). Performs geneset_marker_overlap.f() on each dataset.
 
 ### Chunk 11: module_expression
 Creates and saves dot plots for each set of cell type markers using cumulative expression scores for each cluster and cell type. Expression scores are calculated using AddModuleScore() and account for cell complexity by averaging expression of control genes and comparing to the set of interest (https://www.waltermuskovic.com/2021/04/15/seurat-s-addmodulescore-function/). 
