@@ -20,7 +20,7 @@ Normalizes the data with SCTransform across samples, regressing for counts and g
 Plots UMAP with labels by cluster. Plots UMAP by perturbation and sample, and calculates and plots UMAP by cell cycle based on markers for G2M and S phases. Optionally creates feature plots for mitochondrial percentage, number of transcripts, number of genes, and G2M and S scores with UMAP reductions.
 
 ### Chunk 8: cell_type_functions
-geneset_marker_overlap.f() - Calculates geneset marker overlap, including the percent of known markers for each cell type that are present in each cluster, and the list of those genes. Also includes reformatting to clean up the data before writing to CSV and creating a barplot for each cluster of cell type and percentage.
+geneset_marker_overlap.f() - Calculates geneset marker overlap, including the percent of known markers for each cell type that are present in each cluster, and the list of those genes. Also includes reformatting to clean up the data before writing to CSV and creating a barplot for each cluster of cell type and percentage. Saves barplots.
 
 ### Chunk 9: find_markers
 Sets active identity to clusters, and finds markers that separate each cluster from the rest using MAST and with a logFC threshold of 0.5. Filters these markers to eliminate any downregulated genes (average log2FC value of 0 or less). 
@@ -29,10 +29,10 @@ Sets active identity to clusters, and finds markers that separate each cluster f
 Reads in 5 sets of cell type markers from ***, ***, ***, and ***. Performs geneset_marker_overlap.f() on each dataset.
 
 ### Chunk 11: module_expression
-Creates dot plots for each set of cell type markers using cumulative expression scores for each cluster and cell type. Expression scores are calculated using AddModuleScore() and account for cell complexity by averaging expression of control genes and comparing to the set of interest (https://www.waltermuskovic.com/2021/04/15/seurat-s-addmodulescore-function/). 
+Creates and saves dot plots for each set of cell type markers using cumulative expression scores for each cluster and cell type. Expression scores are calculated using AddModuleScore() and account for cell complexity by averaging expression of control genes and comparing to the set of interest (https://www.waltermuskovic.com/2021/04/15/seurat-s-addmodulescore-function/). 
 
 ### Chunk 12: cell_type_assignment
-After manually obtaining a consensus cell type assignment list from the results of chunks 9 and 10, creates a new metadata category for cell type and plots UMAP with labels by cell type.
+After manually obtaining a consensus cell type assignment list from the results of chunks 9 and 10, creates a new metadata category for cell type and plots and saves UMAP with labels by cell type.
 
 ### Chunk 13: feature_plots
 Plots feature plots of pericentral and periportal gene expression using UMAP reductions. ??Need citation for markers??
