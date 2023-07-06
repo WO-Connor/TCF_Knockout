@@ -3,7 +3,9 @@
 ## TCF_1
 ### Chunk 1: functions
 merge.matrices() - 
+
 group.split() - 
+
 ### Chunk 2: load_data
 Load in first 20 samples from Chromium-SC3Pv3, and for each sample load cell barcodes, gene ids (features), counts, and metadata.
 
