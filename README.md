@@ -38,9 +38,17 @@ After manually obtaining a consensus cell type assignment list from the results 
 
 ## TCF_2:
 ### Chunk 1: load_hep_data
+Load integrated Seurat object from end of TCF_1 and subset it to only include hepatocyte clusters.
+
 ### Chunk 2: recluster
+???
+
 ### Chunk 4: do_dpt
+Calculates the diffusion map using PCAs 1-12 and from this calculate diffusion pseudotime values for each cell. Incorporates these values into the hepatocyte object and creates a scatterplot of the first two eigenvectors from the diffusion map. 
+
 ### Chunk 5: scatter_plots
+Plots and saves the scatterplots created in chunk 4.
+
 ### Chunk 6: feature_plots
 Plots feature plots of pericentral and periportal gene expression using UMAP reductions.
 
