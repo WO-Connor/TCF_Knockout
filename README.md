@@ -1,66 +1,57 @@
 # TCF_Knockout
+### Chunk 1: setup
+Adjusts maximum size, sets seed, and loads required packages.
 
-## TCF_1
-### Chunk 1: functions
-merge.matrices() - merges matrices by row names
+### Chunk 2: functions
+merge.matrices() - Merges matrices by row names.
 
-group.split() - ??not needed??
+### Chunk 3: load_data
+Loads in first 20 samples from Chromium-SC3Pv3, and for each sample loads cell barcodes, gene ids (features), counts, and metadata.
 
-### Chunk 2: load_data
-Load in first 20 samples from Chromium-SC3Pv3, and for each sample load cell barcodes, gene ids (features), counts, and metadata.
+### Chunk 4: seurat_obj_plus_QC
+Creates a Seurat object from data, calculates the percentage of genes that come from the mitochondria in each cell, and filters out doublets, cells with less than 500 genes, and cells with more than 2% mitochondrial genes.
 
-### Chunk 3: seurat_obj_plus_QC
-Create a Seurat object from data, calculate the percentage of genes that come from the mitochondria in each cell, and filter out doublets, cells with less than 500 genes, and cells with more than 2% mitochondrial genes.
+### Chunk 5 & 6: integrate_fns & integrate
+normalize_integrate() - Given a Seurat object, list of variables to regress, and number of features for integration, performs SCTransform normalization and integrates.
+postintegrate() - Given an integrated Seurat object, number of PCA dimensions, and resolution, runs PCA, UMAP, finds neighbors and clusters.
+Normalizes the data with SCTransform across samples, regressing for counts and genes. Integrates over the most variable 3000 genes, runs PCA and UMAP(12 dimensions), and clusters with a resolution of 0.15. 
 
-### Chunk 3 & 4: sctransform & integrate
-Normalize the data with SCTransform across samples, counts, and genes. Integrate, run PCA and UMAP, and cluster. Plot UMAP with labels by cluster.
+### Chunk 7: visualize_clusters
+Plots UMAP with labels by cluster. Plots UMAP by perturbation and sample, and calculates and plots UMAP by cell cycle based on markers for G2M and S phases. Optionally creates feature plots for mitochondrial percentage, number of transcripts, number of genes, and G2M and S scores with UMAP reductions.
 
-### Chunk 5: visualize_clusters
-Plot UMAP by perturbation and sample and calculate and plot UMAP by cell cycle based on markers for G2M and S phases. Optionally create feature plots for mitochondrial percentage, number of transcripts, number of genes, and G2M and S scores with UMAP reductions.
-
-### Chunk 6: diff_eq
-????
-
-### Chunk 7: cell_type_functions
+### Chunk 8: cell_type_functions
 geneset_marker_overlap.f() - Calculate geneset marker overlap, including the percent of known markers for each cell type that are present in each cluster, and the list of those genes. Also includes reformatting to clean up the data before writing to CSV and creating a barplot for each cluster of cell type and percentage.
 
-### Chunk 8: find_markers
+### Chunk 9: find_markers
 Set active identity to clusters, and find markers that separate each cluster from the rest using MAST and with a logFC threshold of 0.5. Filter these markers to eliminate any downregulated genes (average log2FC value of 0 or less). 
 
-### Chunk 9: cell-type-markers
+### Chunk 10: cell_type_markers
 Read in 5 sets of cell type markers from ***, ***, ***, and ***. Perform geneset_marker_overlap.f() on each dataset.
 
-### Chunk 10: module-expression
+### Chunk 11: module_expression
 Create dot plots for each set of cell type markers using expression scores for each cluster and cell type. Expression scores are calculated using AddModuleScore() and account for cell complexity by averaging expression of control genes and comparing to the set of interest (https://www.waltermuskovic.com/2021/04/15/seurat-s-addmodulescore-function/). 
 
-### Chunk 11: cell-type-assignment
+### Chunk 12: cell-type-assignment
 After manually obtaining a consensus cell type assignment list from the results of chunks 9 and 10, create a new metadata category for cell type and plot UMAP with labels by cell type.
 
-## TCF_2:
-### Chunk 1: load_hep_data
-Load integrated Seurat object from end of TCF_1 and subset it to only include hepatocyte clusters.
-
-### Chunk 2: recluster
-???
-
-### Chunk 4: do_dpt
-Calculates the diffusion map using PCAs 1-12 and from this calculate diffusion pseudotime values for each cell. Incorporates these values into the hepatocyte object and creates a scatterplot of the first two eigenvectors from the diffusion map. 
-
-### Chunk 5: scatter_plots
-Plots and saves the scatterplots created in chunk 4.
-
-### Chunk 6: feature_plots
+### Chunk 13: feature_plots
 Plots feature plots of pericentral and periportal gene expression using UMAP reductions.
 
-### Chunk 7: one_gene_dpt
+### Chunk 14: load_hep_data
+Load integrated Seurat object from end of TCF_1 and subset it to only include hepatocyte clusters.
+
+### Chunk 15: do_dpt
+Calculates the diffusion map using PCAs 1-12 and from this calculate diffusion pseudotime values for each cell. Incorporates these values into the hepatocyte object and creates a scatterplot of the first two eigenvectors from the diffusion map. 
+
+### Chunk 16: one_gene_dpt
 plot_gene_dpt_solo() - Splits Seurat object by perturbation and calculates a line of best fit for normalized expression as it relates to diffusion pseudotime using loess for knockout and wild genotypes. 
 
-### Chunk 8: list_genes_dpt
+### Chunk 17: list_genes_dpt
 plot_gene_dpt_list() - Runs plot_gene_dpt_solo() for a given list of genes on a given object
 
-### Chunk 9: plot_dpt
+### Chunk 18: plot_dpt
 Runs plot_gene_dpt_list() on the hepatocyte object for pericentral and periportal marker lists, and Axin and Gpr49 are excluded due to not being in the hepatocyte object.
 
-### Chunk 10 & 11: cumulative_dpt & plot_cumulative_dpt
+### Chunk 19 & 20: cumulative_dpt & plot_cumulative_dpt
 plot_gene_dpt_cumulative() - Given a Seurat object, genelist, and title, create a DPT trace of the sum of all expressions of the genes in the list.
 Plots cumulative normalized expression for lists of pericentral and periportal markers, with Axin and Gpr49 excluded due to not being in the hepatocyte object.
