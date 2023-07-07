@@ -21,7 +21,7 @@ Normalizes the data with SCTransform across samples, regressing for counts and g
 Plots UMAP with labels by cluster. Plots UMAP by perturbation and sample, and calculates and plots UMAP by cell cycle based on markers for G2M and S phases. Optionally creates feature plots for mitochondrial percentage, number of transcripts, number of genes, and G2M and S scores with UMAP reductions.
 
 ### Chunk 8: cell_type_functions
-geneset_marker_overlap.f() - Calculates geneset marker overlap, including the percent of known markers for each cell type that are present in each cluster, and the list of those genes. Also includes reformatting to clean up the data before writing to CSV and creating a barplot for each cluster of cell type and percentage. Saves barplots.
+geneset_marker_overlap.f() - Calculates geneset marker overlap, including the percent of known markers for each cell type that are present in each cluster, and the list of those genes. Also includes reformatting to clean up the data before writing to CSV and creating a barplot for each cluster of cell type, number of overlapping genes, and percentage. Saves barplots.
 
 ### Chunk 9: find_markers
 Sets active identity to clusters, and finds markers that separate each cluster from the rest using MAST and with a logFC threshold of 0.5. Filters these markers to eliminate any downregulated genes (average log2FC value of 0 or less). 
