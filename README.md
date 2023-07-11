@@ -15,10 +15,10 @@ Creates a Seurat object from data, calculates the percentage of genes that come 
 ### Chunk 5 & 6: integrate_fns & integrate
 normalize_integrate() - Given a Seurat object, list of variables to regress, and number of features for integration, performs SCTransform normalization and integrates.
 postintegrate() - Given an integrated Seurat object, number of PCA dimensions, and resolution, runs PCA, UMAP, finds neighbors and clusters.
-Normalizes the data with SCTransform across samples, regressing for counts and genes. Integrates over the most variable 3000 genes, runs PCA and UMAP(12 dimensions), and clusters with a resolution of 0.15. 
+Normalizes the data with SCTransform across samples, regressing for mitochondrial percentage, counts, and genes. Integrates over the most variable 3000 genes, runs PCA and UMAP(12 dimensions), and clusters with a resolution of 0.15. 
 
 ### Chunk 7: visualize_clusters
-Plots UMAP with labels by cluster. Plots UMAP by perturbation and sample, and calculates and plots UMAP by cell cycle based on markers for G2M and S phases. Optionally creates feature plots for mitochondrial percentage, number of transcripts, number of genes, and G2M and S scores with UMAP reductions.
+Plots and saves UMAP with labels by cluster. Plots and saves UMAP by perturbation and sample, and calculates, plots, and saves UMAP by cell cycle based on markers for G2M and S phases. Optionally creates feature plots for mitochondrial percentage, number of transcripts, number of genes, and G2M and S scores with UMAP reductions.
 
 ### Chunk 8: cell_type_functions
 geneset_marker_overlap.f() - Calculates geneset marker overlap, including the percent of known markers for each cell type that are present in each cluster, and the list of those genes. Also includes reformatting to clean up the data before writing to CSV and creating a barplot for each cluster of cell type, number of overlapping genes, and percentage. Saves barplots.
@@ -44,6 +44,12 @@ Subsets integrated Seurat object to only include hepatocyte clusters and save.
 ### Chunk 15: do_dpt
 Calculates the diffusion map using PCAs 1-12 and from this calculates diffusion pseudotime values for each cell. Incorporates these values into the hepatocyte object and creates a scatterplot of the first two eigenvectors from the diffusion map. 
 
+### Chunk 16: reintegrate
+Normalizes the hepatocyte object into a second hepatocyte object with SCTransform across samples, regressing for mitochondrial percentage, counts, and genes. Integrates over the most variable 3000 genes, runs PCA and UMAP(30 dimensions), and clusters with a resolution of 0.75.
+
+### Chunk 17: do_dpt_again
+Plots and saves UMAP for integrated hepatocyte object labeled by cluster number. Calculates the diffusion map using PCAs 1-30 and from this calculates diffusion pseudotime values for each cell. Incorporates these values into the integrated hepatocyte object and creates a scatterplot of the first two eigenvectors from the diffusion map.
+
 ### Chunk 16: one_gene_dpt_fn
 plot_gene_dpt_solo() - Splits Seurat object by perturbation and calculates a line of best fit for normalized expression as it relates to diffusion pseudotime using loess for knockout and wild genotypes. Plots these lines on the same plot. 
 
@@ -51,8 +57,8 @@ plot_gene_dpt_solo() - Splits Seurat object by perturbation and calculates a lin
 plot_gene_dpt_list() - Runs plot_gene_dpt_solo() for a given list of genes on a given object
 
 ### Chunk 18: plot_dpt
-Runs plot_gene_dpt_list() on the hepatocyte object for pericentral and periportal marker lists, and Axin and Gpr49 are excluded due to not being in the hepatocyte object.
+Runs plot_gene_dpt_list() on the hepatocyte object for pericentral and periportal marker lists, and Axin and Gpr49 are excluded due to not being in the hepatocyte object. Saves plots.
 
 ### Chunk 19 & 20: cumulative_dpt_fn & plot_cumulative_dpt
 plot_gene_dpt_cumulative() - Given a Seurat object, genelist, and title, calculates a line of best fit for normalized expression as it relates to diffusion pseudotime using loess for the sum of all expressions of the genes in the list for both wild and knockout genotypes and plots these traces on the same plot.
-Plots cumulative normalized expression for lists of pericentral and periportal markers using plot_gene_dpt_cumulative(), with Axin and Gpr49 excluded due to not being in the hepatocyte object.
+Plots and saves cumulative normalized expression for lists of pericentral and periportal markers using plot_gene_dpt_cumulative(), with Axin and Gpr49 excluded due to not being in the hepatocyte object.
