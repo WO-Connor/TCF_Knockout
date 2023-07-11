@@ -19,6 +19,9 @@ suppressPackageStartupMessages(library(scuttle))
 suppressPackageStartupMessages(library(scater))
 suppressPackageStartupMessages(library(stringr))
 suppressPackageStartupMessages(library(openxlsx))
+suppressPackageStartupMessages(library(destiny))
+suppressPackageStartupMessages(library(gam))
+suppressPackageStartupMessages(library(ggthemes))
 ```
 
 # Functions
@@ -151,16 +154,20 @@ postintegrate <- function(seurat_obj, pcadim, rsltn){
 ```
 
 ```{r integrate}
-seurat_integrated <- normalize_integrate(filtered_seurat,c("nCount_RNA","nFeature_RNA"),3000)
+seurat_integrated <- normalize_integrate(filtered_seurat,c("mt.percent","nCount_RNA","nFeature_RNA"),3000)
 seurat_integrated <- postintegrate(seurat_integrated,12,0.15)
 ```
 
 ## Visualize Clusters
 
 ```{r visualize_clusters}
+Idents(seurat_integrated) <- "seurat_clusters"
 DimPlot(seurat_integrated,reduction = "umap",label = TRUE,label.size = 6)
+ggsave("umap.png",last_plot())
 DimPlot(seurat_integrated,label = TRUE, split.by = "perturbation")  + NoLegend()
+ggsave("umap_condition.png",last_plot())
 DimPlot(seurat_integrated,label = TRUE, split.by = "sample",ncol = 3)  + NoLegend()
+ggsave("umap_sample.png",last_plot())
 
 seurat_integrated <- CellCycleScoring(
      seurat_integrated,
@@ -172,6 +179,7 @@ seurat_integrated <- CellCycleScoring(
 Idents(seurat_integrated) <- "seurat_clusters"
 DimPlot(seurat_integrated, 
         label = TRUE, split.by = "Phase",ncol = 3)  + NoLegend()
+ggsave("umap_cycle.png",last_plot())
 
 # metrics <-  c("mt.percent", "nCount_RNA", "nFeature_RNA", "S.Score", "G2M.Score")
 # FeaturePlot(seurat_integrated,
@@ -184,6 +192,22 @@ DimPlot(seurat_integrated,
 ```
 
 # Cell Type Assignment
+
+```{r find_markers}
+#seurat_integrated <- readRDS('seurat_integrated.rds')
+Idents(seurat_integrated) <- "seurat_clusters"
+proj_name <- "TCF_Knockout"
+markers <- FindAllMarkers(seurat_integrated, 
+                          min.pct = -Inf, 
+                          logfc.threshold = .5, 
+                          only.pos = T, 
+                          test.use = "MAST",
+                          latent.vars = c('mt.percent', 'nFeature_RNA'))
+markers <- markers %>%
+  filter(avg_log2FC > 0) %>%
+  write_csv(paste0(proj_name, '_HighlyEnrichedMarkers_logFC.5.csv'))
+markers
+```
 
 ```{r cell_type_functions}
 geneset_marker_overlap.f <- function(SerObj, enrichedGenes_df, known_markers, FC_thresh = 0, projname = 'proj', w = NULL, h = NULL, facet_ncol = 5, save_plot = T) {
@@ -204,12 +228,14 @@ geneset_marker_overlap.f <- function(SerObj, enrichedGenes_df, known_markers, FC
         pull(gene) %>%
         unique() %>%
         as.vector()
-
-      per <- length(intersect(df_tmp$gene, cell_type_markers)) / length(cell_type_markers) * 100
+      
+      numb <- length(intersect(df_tmp$gene, cell_type_markers))
+      per <- numb / length(cell_type_markers) * 100
       genes <- intersect(df_tmp$gene, cell_type_markers)
 
       overlap_df <- bind_rows(overlap_df, data.frame('Cluster' = i,
                                                      'Type' = t,
+                                                     'Number' = numb,
                                                      'Percent' = round(per, 2),
                                                      'Overlap_genes' = paste(genes, collapse = '|'),
                                                      'number_of_cluster_markers' = length(df_tmp$gene)))
@@ -231,9 +257,10 @@ geneset_marker_overlap.f <- function(SerObj, enrichedGenes_df, known_markers, FC
     mutate(facet_name = paste0(Cluster, " (", number_of_cluster_markers, ")"))
 
   overlap_df$facet_name <- reorder(overlap_df$facet_name, as.numeric(overlap_df$Cluster))
-
+  
   # Plot
-  g <- ggplot(overlap_df, aes(Type, Percent, alpha = Percent)) +
+  g <- ggplot(overlap_df, aes(Type, Number, alpha = Percent)) +
+  #g <- ggplot(overlap_df, aes(Type, Percent, alpha = Percent)) +
           geom_bar(stat = 'identity', color = 'black') +
           facet_wrap(~facet_name, ncol = facet_ncol, scales = 'free_y') +
           scale_x_discrete(NULL) +
@@ -253,7 +280,6 @@ geneset_marker_overlap.f <- function(SerObj, enrichedGenes_df, known_markers, FC
       print(paste0('Saving percent image as: ', filename))
 
 
-
   # Determine width and height
   if (is.null(w)) {
     w = min(10, length(unique(overlap_df$Cluster)) * 1.75 + 3)
@@ -266,22 +292,6 @@ geneset_marker_overlap.f <- function(SerObj, enrichedGenes_df, known_markers, FC
   }
   return(g)
 }
-```
-
-```{r find_markers}
-Idents(seurat_integrated) <- "seurat_clusters"
-proj_name <- "TCF_Knockout"
-#seurat_integrated <- readRDS('seurat_integrated.rds')
-markers <- FindAllMarkers(seurat_integrated, 
-                          min.pct = -Inf, 
-                          logfc.threshold = .5, 
-                          only.pos = T, 
-                          test.use = "MAST",
-                          latent.vars = c('mt.percent', 'nFeature_RNA'))
-markers <- markers %>%
-  filter(avg_log2FC > 0) %>%
-  write_csv(paste0(proj_name, '_HighlyEnrichedMarkers_logFC.5.csv'))
-markers
 ```
 
 ## Determine and assign cell type
@@ -494,14 +504,16 @@ FeaturePlot(seurat_integrated,
             min.cutoff = 'q10',
             ncol = 2,
             label = FALSE)
+
 ```
 
 # Perform DPT calculation
 
 ```{r load_hep_data}
-#seurat_integrated <- readRDS("TCF_Knockout_seurat-integrated.rds")
-hepatocyte_obj <- subset(x = seurat_integrated, subset = `seurat_clusters` ==  c('0'))
-saveRDS(hepatocyte_obj,"hepatocyte_obj.rds")
+#seurat_integrated <- readRDS("TCF_Knockout_seurat-obj.rds")
+hepatocyte_obj <- subset(x = seurat_integrated, subset = `seurat_clusters` ==  c('0','1','2')) #7 not included due to distance on UMAP and 6 due to presence of other markers
+#saveRDS(hepatocyte_obj,"hepatocyte_obj.rds")
+#hepatocyte_obj <- readRDS("hepatocyte_obj.rds")
 ```
 
 ```{r do_dpt}
@@ -511,7 +523,7 @@ dpt <- DPT(dm)
 hepatocyte_obj$dpt <- rank(dpt$dpt)
 dpt_vals <- hepatocyte_obj$dpt
 
-hepatocyte_obj$dpt <- ((dpt_vals)/max(dpt_vals))*8+1
+hepatocyte_obj$dpt <- -((dpt_vals)/max(dpt_vals))*8+9
 
 meta <- hepatocyte_obj@meta.data
 
@@ -527,7 +539,55 @@ dc_scatter_by_dpd <- ggplot(tmp, aes(x = DC1, y = DC2, colour = dpd)) + geom_poi
 dc_scatter_by_cluster <- ggplot(tmp, aes(x = DC1, y = DC2, colour=cluster)) + geom_point() +
                             xlab("DC 1") + ylab("DC 2") + theme_few()
 dc_scatter_by_cluster
+ggsave("scatter_cluster.png",last_plot())
 dc_scatter_by_dpd
+ggsave("scatter_dpd.png",last_plot())
+```
+
+```{r reintegrate}
+hepatocyte_obj_reint <- normalize_integrate(hepatocyte_obj,c("mt.percent","nCount_RNA","nFeature_RNA"),3000)
+hepatocyte_obj_reint <- postintegrate(hepatocyte_obj_reint,30,0.75)
+```
+
+```{r do_dpt_again}
+DimPlot(hepatocyte_obj_reint,reduction = "umap",label = TRUE,label.size = 6)
+ggsave("umap_reint.png",last_plot())
+hepatocyte_obj_reint <- subset(x = hepatocyte_obj_reint, subset = `seurat_clusters` ==  c('0','1','2','3','4','5','6','7'))
+dm <- DiffusionMap(Embeddings(hepatocyte_obj_reint, "pca")[,1:12])
+dpt <- DPT(dm)
+
+hepatocyte_obj_reint$dpt <- rank(dpt$dpt)
+dpt_vals <- hepatocyte_obj_reint$dpt
+
+hepatocyte_obj_reint$dpt <- ((dpt_vals)/max(dpt_vals))*8+1
+
+meta <- hepatocyte_obj_reint@meta.data
+
+tmp <- data.frame(DC1 = eigenvectors(dm)[, 1],
+                  DC2 = eigenvectors(dm)[, 2],
+                  DC3 = eigenvectors(dm)[, 3],
+                  DC4 = eigenvectors(dm)[, 4],
+                  cluster = hepatocyte_obj_reint$seurat_clusters,
+                  dpd = dpt_vals)
+
+dc_scatter_by_dpd <- ggplot(tmp, aes(x = DC1, y = DC2, colour = dpd)) + geom_point() + 
+                            xlab("DC 1") + ylab("DC 2") + theme_few()
+dc_scatter_by_cluster <- ggplot(tmp, aes(x = DC1, y = DC2, colour=cluster)) + geom_point() +
+                            xlab("DC 1") + ylab("DC 2") + theme_few()
+dc_scatter_by_cluster
+ggsave("scatter_cluster_reint.png",last_plot())
+dc_scatter_by_dpd
+ggsave("scatter_dpd_reint.png",last_plot())
+
+FeaturePlot(hepatocyte_obj_reint, 
+            reduction = "umap", 
+            features = c("Glul","Cyp2f2"),
+            pt.size = 0.2, 
+            order = TRUE,
+            min.cutoff = 'q10',
+            ncol = 2,
+            label = FALSE)
+ggsave("reint_feature_centralportal.png",last_plot())
 ```
 
 # DPT Plots: KO vs. WT
@@ -572,8 +632,10 @@ plot_gene_dpt_list <- function(seurat_obj, genelist){
 ```
 
 ```{r plot_dpt}
-plot_gene_dpt_list(hepatocyte_obj,genes$Pericentral[!genes$Pericentral%in%c("Axin","Gpr49",NA)])
-plot_gene_dpt_list(hepatocyte_obj,genes$Periportal)
+plot_gene_dpt_list(hepatocyte_obj_reint,genes$Pericentral[!genes$Pericentral%in%c("Axin","Gpr49",NA)])
+ggsave("traces_pericentral.png",last_plot())
+plot_gene_dpt_list(hepatocyte_obj_reint,genes$Periportal)
+ggsave("traces_periportal.png",last_plot())
 ```
 
 # DPT Plots: Cumulative PC and Cumulative PP
@@ -634,6 +696,8 @@ plot_gene_dpt_cumulative <- function(seurat_obj, genelist,title) {
 ```
 
 ```{r plot_cumulative_dpt}
-plot_gene_dpt_cumulative(hepatocyte_obj,genes$Pericentral[!genes$Pericentral%in%c("Axin","Gpr49",NA)],"Pericentral")
-plot_gene_dpt_cumulative(hepatocyte_obj,genes$Periportal,"Periportal")
+plot_gene_dpt_cumulative(hepatocyte_obj_reint,genes$Pericentral[!genes$Pericentral%in%c("Axin","Gpr49",NA)],"Pericentral")
+ggsave("cumul_trace_pericentral.png",last_plot())
+plot_gene_dpt_cumulative(hepatocyte_obj_reint,genes$Periportal,"Periportal")
+ggsave("cumul_trace_periportal.png",last_plot())
 ```
