@@ -57,8 +57,8 @@ plot_gene_dpt_solo() - Splits Seurat object by perturbation and calculates a lin
 plot_gene_dpt_list() - Runs plot_gene_dpt_solo() for a given list of genes on a given object
 
 ### Chunk 18: plot_dpt
-Runs plot_gene_dpt_list() on the hepatocyte object for pericentral and periportal marker lists, and Axin and Gpr49 are excluded due to not being in the hepatocyte object. Saves plots.
+Runs plot_gene_dpt_list() on the reintegrated hepatocyte object for pericentral and periportal marker lists, and Axin and Gpr49 are excluded due to not being in the hepatocyte object. Saves plots.
 
 ### Chunk 19 & 20: cumulative_dpt_fn & plot_cumulative_dpt
 plot_gene_dpt_cumulative() - Given a Seurat object, genelist, and title, calculates a line of best fit for normalized expression as it relates to diffusion pseudotime using loess for the sum of all expressions of the genes in the list for both wild and knockout genotypes and plots these traces on the same plot.
-Plots and saves cumulative normalized expression for lists of pericentral and periportal markers using plot_gene_dpt_cumulative(), with Axin and Gpr49 excluded due to not being in the hepatocyte object.
+Plots and saves cumulative normalized expression for lists of pericentral and periportal markers using plot_gene_dpt_cumulative(), with Axin and Gpr49 excluded due to not being in the reintegrated hepatocyte object.
