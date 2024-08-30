@@ -1,12 +1,14 @@
 ---
-title: "TCF"
+title: "TCF_Final"
 output: html_document
-date: "2023-07-06"
+date: "2024-08-30"
 ---
+
+# Setup
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
-options(future.globals.maxSize = 800000 * 1024^2, future.seed = TRUE)
+options(future.globals.maxSize = 80000000000000 * 1024^2, future.seed = TRUE)
 set.seed(1234)
 suppressPackageStartupMessages(library(Matrix))
 suppressPackageStartupMessages(library(Seurat))
@@ -22,9 +24,19 @@ suppressPackageStartupMessages(library(openxlsx))
 suppressPackageStartupMessages(library(destiny))
 suppressPackageStartupMessages(library(gam))
 suppressPackageStartupMessages(library(ggthemes))
-```
+suppressPackageStartupMessages(library(pheatmap))
+suppressPackageStartupMessages(library(viridis))
+suppressPackageStartupMessages(library(Hmisc))
+suppressPackageStartupMessages(library(org.Mm.eg.db))
+suppressPackageStartupMessages(library(data.table))
+suppressPackageStartupMessages(library(patchwork))
+suppressPackageStartupMessages(library(cowplot))
+library(fgsea)
+library(dplyr)
+library(ggh4x)
+#library(RColorBrewer)
 
-# Functions
+```
 
 ```{r general_functions}
 # much faster `merge` on matrices (assumes `by = "row.names"`)
@@ -36,9 +48,14 @@ merge.matrices <- function (x,y) {
   y <- rbind(y,`row.names<-`(matrix(0,nrow = length(missing.y),ncol = ncol(y)),missing.y))
   return(cbind2(x[xy.names,],y[xy.names,]))
 }
+findgenes <- function(obj,startstr){
+  row.names(obj@assays$RNA@counts)[grepl(paste0("^",startstr),row.names(obj@assays$RNA@counts))]
+}
 ```
 
-# Load and consolidate data
+# Whole Liver
+
+## Load and consolidate data
 
 ```{r load_data}
 # import sample data 
@@ -101,9 +118,10 @@ metadata <- metadata.files %>%
   dplyr::select(cell,sample,hashtag,tidyselect::everything()) %>%
   tibble::column_to_rownames("cell")
 n.grid <- ceiling(sqrt(length(unique(metadata$sample))))
+
 ```
 
-# Create Seurat Objects and QC
+## Create Seurat Objects and QC
 
 ```{r seurat_obj_plus_QC}
 # build object
@@ -123,322 +141,127 @@ filtered_seurat <- subset(x = seurat_obj,
                          subset= (nFeature_RNA > 500) & 
                            (mt.percent <= 2) & 
                            (scdbl=='singlet'))
+rm(sce)
 ```
 
-# SCTransform, Integration, and Clustering
+## SCTransform, Integration, and Clustering
 
 ```{r integration_fns}
-normalize_integrate <- function(seurat_obj, rgrslist, nfeat){
+normalize <- function(seurat_obj, rgrslist, nfeat){
+  split_seurat <- seurat_obj %>%
+    Seurat::SplitObject(split.by = "sample") %>%
+    lapply(Seurat::SCTransform,vars.to.regress = rgrslist,verbose = FALSE)
   split_seurat <- SplitObject(seurat_obj, split.by = "sample")
 
   for (i in 1:length(split_seurat)) {
-     split_seurat[[i]] <- SCTransform(split_seurat[[i]], vars.to.regress = rgrslist, vst.flavor = "v2")
+     split_seurat[[i]] <- SCTransform(split_seurat[[i]], vars.to.regress = rgrslist)#, vst.flavor = "v2")
   }
 
-  integ_features <- SelectIntegrationFeatures(object.list = split_seurat, nfeatures = nfeat)
+  integ_features <- SelectIntegrationFeatures(object.list = split_seurat, nfeatures = nfeat,verbose = FALSE)
 
   split_seurat <- PrepSCTIntegration(object.list = split_seurat, anchor.features = integ_features)
 
   integ_anchors <- FindIntegrationAnchors(object.list = split_seurat, normalization.method = "SCT", anchor.features = integ_features) # 15-20 mins
-  rm(seurat_obj)
-  seurat_integrated <- IntegrateData(anchorset = integ_anchors, normalization.method = "SCT")
+  return(integ_anchors)
+}
+integrate <- function(anchors){
+  seurat_integrated <- IntegrateData(anchorset = anchors, normalization.method = "SCT")
   return(seurat_integrated)
 }
 postintegrate <- function(seurat_obj, pcadim, rsltn){
   seurat_obj <- RunPCA(object = seurat_obj)
   seurat_obj <- RunUMAP(seurat_obj, dims = 1:pcadim,reduction = "pca")
-  seurat_obj <- FindNeighbors(object = seurat_obj, dims = 1:pcadim)
+  seurat_obj <- FindNeighbors(object = seurat_obj, dims = 1:pcadim,reduction='pca')
   seurat_obj <- FindClusters(object = seurat_obj,resolution = c(rsltn))
   return(seurat_obj)
 }
 ```
 
 ```{r integrate}
-seurat_integrated <- normalize_integrate(filtered_seurat,c("mt.percent","nCount_RNA","nFeature_RNA"),3000)
-seurat_integrated <- postintegrate(seurat_integrated,12,0.15)
+anchs <- normalize(filtered_seurat,c("mt.percent","nCount_RNA","nFeature_RNA"),3000)#
+rm(barcodes,counts,features,filtered_seurat,seurat_obj,single_cell_results,metadata)
+#saveRDS(anchs,"anchs_test.rds")
+#anchs <- readRDS("anchs_test.rds")
+seurat_integrated <- integrate(anchs)
+seurat_integrated <- postintegrate(seurat_integrated,12,0.12)
+DefaultAssay(seurat_integrated) <- "RNA"
+seurat_integrated <- NormalizeData(seurat_integrated)
+seurat_integrated <- ScaleData(seurat_integrated)
+saveRDS(seurat_integrated,"TCF_Knockout_seurat_integrated_mtcountfeat_012.rds")
 ```
 
-## Visualize Clusters
+## Cell Type
 
-```{r visualize_clusters}
-Idents(seurat_integrated) <- "seurat_clusters"
-DimPlot(seurat_integrated,reduction = "umap",label = TRUE,label.size = 6)
-ggsave("umap.png",last_plot())
-DimPlot(seurat_integrated,label = TRUE, split.by = "perturbation")  + NoLegend()
-ggsave("umap_condition.png",last_plot())
-DimPlot(seurat_integrated,label = TRUE, split.by = "sample",ncol = 3)  + NoLegend()
-ggsave("umap_sample.png",last_plot())
-
-seurat_integrated <- CellCycleScoring(
-     seurat_integrated,
-     s.features = str_to_title(cc.genes$s.genes),
-     g2m.features = str_to_title(cc.genes$g2m.genes),
-     assay = 'RNA',
-     set.ident = TRUE)
-
-Idents(seurat_integrated) <- "seurat_clusters"
-DimPlot(seurat_integrated, 
-        label = TRUE, split.by = "Phase",ncol = 3)  + NoLegend()
-ggsave("umap_cycle.png",last_plot())
-
-# metrics <-  c("mt.percent", "nCount_RNA", "nFeature_RNA", "S.Score", "G2M.Score")
-# FeaturePlot(seurat_integrated,
-#             reduction = "umap",
-#             features = metrics,
-#             pt.size = 0.4,
-#             order = TRUE,
-#             min.cutoff = 'q10')
-
-```
-
-# Cell Type Assignment
-
-```{r find_markers}
-#seurat_integrated <- readRDS('seurat_integrated.rds')
-Idents(seurat_integrated) <- "seurat_clusters"
-proj_name <- "TCF_Knockout"
-markers <- FindAllMarkers(seurat_integrated, 
-                          min.pct = -Inf, 
-                          logfc.threshold = .5, 
-                          only.pos = T, 
-                          test.use = "MAST",
-                          latent.vars = c('mt.percent', 'nFeature_RNA'))
-markers <- markers %>%
-  filter(avg_log2FC > 0) %>%
-  write_csv(paste0(proj_name, '_HighlyEnrichedMarkers_logFC.5.csv'))
-markers
-```
-
-```{r cell_type_functions}
-geneset_marker_overlap.f <- function(SerObj, enrichedGenes_df, known_markers, FC_thresh = 0, projname = 'proj', w = NULL, h = NULL, facet_ncol = 5, save_plot = T) {
-
-  ### Loop through each cluster and calculate the percentage of genes from each cell type in that cluster
-  #     above the FC_thresh using the output from finding highly enriched markers of each cluster
-  overlap_df <- data.frame()
-  for (i in sort(unique(Idents(SerObj)))) {
-    cat(paste0('\nCalculating geneset percentages for cluster ', i, '...'))
-    df_tmp <- enrichedGenes_df %>%
-      filter(cluster == i) %>%
-      filter(avg_log2FC > FC_thresh)
-
-    for (t in unique(sort(known_markers$type))) {
-
-      cell_type_markers <- known_markers %>%
-        filter(type == t) %>%
-        pull(gene) %>%
-        unique() %>%
-        as.vector()
-      
-      numb <- length(intersect(df_tmp$gene, cell_type_markers))
-      per <- numb / length(cell_type_markers) * 100
-      genes <- intersect(df_tmp$gene, cell_type_markers)
-
-      overlap_df <- bind_rows(overlap_df, data.frame('Cluster' = i,
-                                                     'Type' = t,
-                                                     'Number' = numb,
-                                                     'Percent' = round(per, 2),
-                                                     'Overlap_genes' = paste(genes, collapse = '|'),
-                                                     'number_of_cluster_markers' = length(df_tmp$gene)))
-    }
-  }
-  cat('\n\n')
-  
-  ### Reformat the dataframe to be easier to read, write to csv, and return
-  overlap_df %>%
-    dplyr::select(Cell_Type = Type, everything()) %>%
-    write_csv(paste0(projname, '_FC', FC_thresh, '.csv'))
-
-  ### Refactor cluster so appear in numerical order
-  overlap_df <- overlap_df %>%
-    mutate(Cluster = factor(Cluster, levels = unique(Cluster)))
-
-  ### Create a bar plot to show the percent cell type cells present in each cluster
-  overlap_df <- overlap_df %>%
-    mutate(facet_name = paste0(Cluster, " (", number_of_cluster_markers, ")"))
-
-  overlap_df$facet_name <- reorder(overlap_df$facet_name, as.numeric(overlap_df$Cluster))
-  
-  # Plot
-  g <- ggplot(overlap_df, aes(Type, Number, alpha = Percent)) +
-  #g <- ggplot(overlap_df, aes(Type, Percent, alpha = Percent)) +
-          geom_bar(stat = 'identity', color = 'black') +
-          facet_wrap(~facet_name, ncol = facet_ncol, scales = 'free_y') +
-          scale_x_discrete(NULL) +
-          theme_bw() +
-          theme(text = element_text(size = 20),
-
-                axis.title = element_text(size = 18, face = 'bold'),
-                axis.text.y = element_text(size = 16, color = 'black'),
-                axis.text.x = element_text(size = 16, color = 'black', angle = 90, hjust = 1, vjust = .5),
-
-                strip.text = element_text(face = 'bold'),
-
-                panel.grid = element_blank())
-  
-  if (save_plot == T) {
-      filename = paste0(projname, '_FC', FC_thresh, '.png')
-      print(paste0('Saving percent image as: ', filename))
+```{r celltypeheatmap}
+genes <- c("Alb","Ttr","Hnf4a","Krt19","Sox9","Epcam","Cd3d","Cd3g","Ms4a1","Cd79b","Cd19","Ncr1","Gzma","Nkg7","Csf3r","S100a8","Itgax","Ccr2","Ly6c2","Adgre1","Csf1r","Stab1","Stab2","Lyve1","Fcgr2b","Flt4","Vwf","Myh11","Cnn1","Mfap4","Col15a1","Thy1","Lrat","Reln","Des","Dcn")#F4/80->Adgre1;Nkp46->Ncr1;Nk7g->Nkg7
+types <- c("HEP","HEP","HEP","CHOL","CHOL","CHOL","T-Cell","T-Cell","B-Cell","B-Cell","B-Cell","NK Cell","NK Cell","NK Cell","Neutrophil","Neutrophil","DC","Monocyte","Monocyte","Macrophage","Macrophage","LSEC","LSEC","LSEC","LSEC","LSEC","VEC","VSMC","VSMC","PF","PF","PF","HSC","HSC","HSC","HSC")
+goi <- data.frame(genes,types)
 
 
-  # Determine width and height
-  if (is.null(w)) {
-    w = min(10, length(unique(overlap_df$Cluster)) * 1.75 + 3)
-  }
-
-  if (is.null(h)) {
-    h = max(3, 2 * ceiling(length(unique(overlap_df$Cluster)) / 5))
-  }
-      ggsave(filename, g, width = w, height = h)
-  }
-  return(g)
-}
-```
-
-## Determine and assign cell type
-
-### Overlap of cluster markers with markers of known cell types
-
-This is a custom function the checks the percent overlap between a marker gene list of a certain cell type with the markers of each cluster (as determined by the FindMarkers function).
-
-```{r cell_type_markers}
-proj_name <- "TCF_Knockout"
-markers <- read_csv(paste0(proj_name, '_HighlyEnrichedMarkers_logFC.5.csv'))
-dir.create("cell_type_assignment")
-cell_marker_dir <- "cell_marker_lists/"
-
-## MacParland
-cell_markers <- read_csv(paste0(cell_marker_dir, "MacParland_Liver_cellTypeSubmarkers.csv"))
-
-geneset_marker_overlap.f(seurat_integrated,
-                         markers,
-                         cell_markers,
-                         FC_thresh = .5, 
-                         projname = paste0("cell_type_assignment/", proj_name, '_CTA_MacParland'))
+DefaultAssay(seurat_integrated) <- "RNA"
+seurat_integrated <- NormalizeData(seurat_integrated)
+seurat_integrated <- ScaleData(seurat_integrated)
 
 
-# Aizarani list
-cell_markers <- read_csv(paste0(cell_marker_dir, "2019_Aizarani_fig1d.csv"))
+avg_expr <- AverageExpression(object = seurat_integrated, group.by="seurat_clusters",slot='data',features=goi$genes)$RNA
+newnames <- lapply(
+  rownames(avg_expr),
+    function(x) bquote(bolditalic(.(x))))#capitalize(
 
-geneset_marker_overlap.f(seurat_integrated,
-                         markers,
-                         cell_markers,
-                         FC_thresh = .5, 
-                         projname = paste0("cell_type_assignment/", proj_name, '_CTA_Aizarani'))
+newcolnames <- lapply(
+  colnames(avg_expr),
+  function(x) bquote(bolditalic(.(x))))#capitalize(
 
-
-# Zhu list
-cell_markers <- read_csv(paste0(cell_marker_dir, "2019_Zhu.csv"))
-
-geneset_marker_overlap.f(seurat_integrated,
-                         markers,
-                         cell_markers,
-                         FC_thresh = .5, 
-                         projname = paste0("cell_type_assignment/", proj_name, '_CTA_Zhu'))
+anno_table <- as.data.frame(goi)
+rownames(anno_table) <- goi$gene
 
 
-# Halpern list
-cell_markers <- read_csv(paste0(cell_marker_dir, "Halpern_pairedcell_fig1.csv"))
 
-geneset_marker_overlap.f(seurat_integrated,
-                         markers,
-                         cell_markers,
-                         FC_thresh = .5, 
-                         projname = paste0("cell_type_assignment/", proj_name, '_CTA_Halpern'))
+anno_table <- anno_table[,"types", drop = F] #%>%
+colnames(anno_table) <- "Cell Type"
+
+annotation_colors <- list(cell_type = c(
+  `B-Cell` = "#B6992D",
+  `T-Cell` = "#92D",
+  `NK Cell` = "gray",
+  Neutrophil = "black",
+  Monocyte = "blue",
+  Macrophage = "red",
+  VEC = "pink",
+  PF = "green",
+  VSMC = "darkgreen",
+  CHOL = "#8CD17D",
+  HEP = "#4E79A7",
+  DC = "#F28E2B",
+  LSEC = "#A0CBE8",
+  HSC = "#FFBE7D"
+))
 
 
-# Activated Portal fibroblasts/myofibroblasts
-cell_markers <- data.frame(type = "portal fibroblasts", gene = c("Thy1", "Fbln2", "Msln", "Eln", "Grem1", "Cd73", "Col15a1", "Aspn"))
-
-geneset_marker_overlap.f(seurat_integrated,
-                         markers,
-                         cell_markers,
-                         FC_thresh = .5, 
-                         projname = paste0("cell_type_assignment/", proj_name, '_CTA_PF'))
-
+pheatmap(avg_expr,
+         annotation_row = anno_table,
+         annotation_colors = annotation_colors,
+         color = colorRampPalette(c('#408697','#F6F6F6','#8F0009'))(255),
+         scale = 'row',
+         fontsize = 12,
+         fontsize_col = 14,
+         angle_col = "45",
+         cluster_rows = F,
+         cluster_cols = F,
+         labels_row = as.expression(newnames),
+         labels_col = as.expression(newcolnames),
+         annotation_names_row = F,
+         treeheight_row = 55,
+         treeheight_col = 55,
+         cellwidth = 30,
+#         filename = "celltype_heatmap_cluster_murine.png"
+         )
 
 ```
-
-### Cumulative expression of cell type marker list across clusters
-
-For a list of cell type markers, calculate a expression score for each cluster. An in-depth explaination of what is happening in the AddModuleScore function can be found in a [blog post by Walter Muskovic](https://www.waltermuskovic.com/2021/04/15/seurat-s-addmodulescore-function/).
-
-```{r module_expression}
-seurat_tmp <- seurat_integrated
-DefaultAssay(seurat_tmp) <- "RNA"
-## MacParland
-cell_markers <- read_csv("cell_marker_lists/MacParland_Liver_cellTypeSubmarkers.csv")
-
-goi_li <- split(cell_markers$gene, cell_markers$type)
-seurat_tmp <- AddModuleScore(object = seurat_tmp, features = goi_li, name = "MarkerList")
-
-macparland_plot <- DotPlot(seurat_tmp, features = paste0("MarkerList", seq(1, length(goi_li)))) +  
-                            scale_x_discrete(NULL,
-                            labels = names(goi_li)) +
-                        theme(axis.text.x = element_text(angle = 90, vjust = .5, hjust = 1))
-
-ggsave(paste0("cell_type_assignment/", proj_name, "_DP-CTA_MacParland.png"), macparland_plot, units = "in", width = 2 + length(goi_li) * .75, height = 8)
-
-## Aizarani
-cell_markers <- read_csv("cell_marker_lists/2019_Aizarani_fig1d.csv")
-
-goi_li <- split(cell_markers$gene, cell_markers$type)
-seurat_tmp <- AddModuleScore(object = seurat_tmp, features = goi_li, name = "MarkerList",search=TRUE)
-
-aizarani_plot <- DotPlot(seurat_tmp, features = paste0("MarkerList", seq(1, length(goi_li)))) + 
-                        scale_x_discrete(NULL,
-                        labels = names(goi_li)) +
-                      theme(axis.text.x = element_text(angle = 90, vjust = .5, hjust = 1))
-
-ggsave(paste0("cell_type_assignment/", proj_name, "_DP-CTA_Aizarani.png"), aizarani_plot, units = "in", width = 2 + length(goi_li) * .75, height = 8)
-
-## Zhu
-cell_markers <- read_csv("cell_marker_lists/2019_Zhu.csv")
-
-goi_li <- split(cell_markers$gene, cell_markers$type)
-seurat_tmp <- AddModuleScore(object = seurat_tmp, features = goi_li, name = "MarkerList")
-
-zhu_plot <- DotPlot(seurat_tmp, features = paste0("MarkerList", seq(1, length(goi_li)))) + 
-                    scale_x_discrete(NULL,
-                   labels = names(goi_li)) +
-                   theme(axis.text.x = element_text(angle = 90, vjust = .5, hjust = 1))
-
-ggsave(paste0("cell_type_assignment/", proj_name, "_DP-CTA_Zhu.png"), zhu_plot, units = "in", width = 2 + length(goi_li) * .75, height = 8)
-
-## Halpern
-cell_markers <- read_csv("cell_marker_lists/Halpern_pairedcell_fig1.csv")
-
-goi_li <- split(cell_markers$gene, cell_markers$type)
-seurat_tmp <- AddModuleScore(object = seurat_tmp, features = goi_li, name = "MarkerList")
-
-halpern_plot <- DotPlot(seurat_tmp, features = paste0("MarkerList", seq(1, length(goi_li)))) + 
-                        scale_x_discrete(NULL,
-                         labels = names(goi_li)) +
-                        theme(axis.text.x = element_text(angle = 90, vjust = .5, hjust = 1))
-
-ggsave(paste0("cell_type_assignment/", proj_name, "_DP-CTA_Halpern.png"), halpern_plot, units = "in", width = 2 + length(goi_li) * .75, height = 8)
-
-# Activated Portal fibroblasts/myofibroblasts
-cell_markers <- data.frame(type = "portal fibroblasts", gene = c("Thy1", "Fbln2", "Msln", "Eln", "Grem1", "Cd73", "Col15a1", "Aspn"))
-
-goi_li <- split(cell_markers$gene, cell_markers$type)
-seurat_tmp <- AddModuleScore(object = seurat_tmp, features = goi_li, name = "MarkerList") 
-
-fibroblast_plot <- DotPlot(seurat_tmp, features = paste0("MarkerList", seq(1, length(goi_li)))) + 
-                    scale_x_discrete(NULL,
-                   labels = names(goi_li)) +
-                    theme(axis.text.x = element_text(angle = 90, vjust = .5, hjust = 1))
-
-ggsave(paste0("cell_type_assignment/", proj_name, "_DP-CTA_PF.png"), fibroblast_plot, units = "in", width = 2 + length(goi_li) * .75, height = 8)
-
-```
-
-### Assign cell types
-
-Based on the results of the overlap analysis and the module expression scores, we can assign cell types. This is curated manually and saved as a <name>\_cluster_assignment.csv file.
 
 ```{r cell_type_assignment}
 proj_name <- "TCF_Knockout"
-cluster_assn <- read_csv(paste0(proj_name, '_cluster_assignment.csv'))
+cluster_assn <- read_csv(paste0(proj_name, '_cluster_assignment_012.csv'))
 cluster_assn <- cluster_assn%>%
   mutate(cluster_assignment = paste(cluster_assn$Cluster, cluster_assn$Assignment, sep = "_"))
 
@@ -459,107 +282,344 @@ seurat_integrated[["cluster_named"]] <- Idents(seurat_integrated)
 cluster_named_plot <- DimPlot(seurat_integrated, reduction = "umap", label = TRUE, pt.size = 0.5) + NoLegend() 
 cluster_named_plot
 
-ggsave(paste0(proj_name, "_umap_clusterNamed.png"), cluster_named_plot, units = 'in', width = 6, height = 6, dpi = 250)
+ggsave(paste0("umap_celltype_012.png"), cluster_named_plot, units = 'in', width = 6, height = 6, dpi = 250)
 
-
-# Save a cluster named and a cluster named without immune
-#saveRDS(seurat_integrated, paste0(proj_name, '_seurat-integrated.rds'))
+saveRDS(seurat_integrated, "TCF_Knockout_seurat_integrated_mtcountfeat_012.rds")
 ```
 
-# Feature Plots
+```{r S2D}
+avg_expr <- AverageExpression(object = seurat_integrated, group.by="cluster_named",slot='data',features=goi$genes)$RNA
+avg_expr <- avg_expr[c(1:3,22:27,4:6,33:36,28:32,15:16,7:14,17:21),c(1,2,3,7,5,4,6)]
 
-```{r feature_plots}
-#seurat_integrated <- readRDS(paste0(proj_name,'_seurat-integrated.rds'))
-genes <- read_csv("pp_vs_pc.csv")
-DefaultAssay(seurat_integrated) <- "RNA"
-FeaturePlot(seurat_integrated, 
-            reduction = "umap", 
-            features = genes$Periportal[1:6],
-            pt.size = 0.2, 
-            order = TRUE,
-            min.cutoff = 'q10',
-            ncol = 2,
-            label = FALSE)
-FeaturePlot(seurat_integrated, 
-            reduction = "umap", 
-            features = genes$Periportal[7:13],
-            pt.size = 0.2, 
-            order = TRUE,
-            min.cutoff = 'q10',
-            ncol = 2,
-            label = FALSE)
-FeaturePlot(seurat_integrated, 
-            reduction = "umap", 
-            features = genes$Pericentral[1:6],
-            pt.size = 0.2, 
-            order = TRUE,
-            min.cutoff = 'q10',
-            ncol = 2,
-            label = FALSE)
-FeaturePlot(seurat_integrated, 
-            reduction = "umap", 
-            features = genes$Pericentral[7:12],
-            pt.size = 0.2, 
-            order = TRUE,
-            min.cutoff = 'q10',
-            ncol = 2,
-            label = FALSE)
+pheatmap(avg_expr,
+         annotation_row = anno_table,
+         annotation_colors = annotation_colors,
+         color = colorRampPalette(c('#408697','#F6F6F6','#8F0009'))(255),
+         scale = 'row',
+         fontsize = 12,
+         fontsize_col = 14,
+         angle_col = "45",
+         cluster_rows = F,
+         cluster_cols = F,
+         labels_row = as.expression(newnames),
+         labels_col = as.expression(newcolnames),
+         annotation_names_row = F,
+         treeheight_row = 55,
+         treeheight_col = 55,
+         cellwidth = 30,
+         filename = "celltype_heatmap_celltype_murine.png"
+         )
 
 ```
 
-# Perform DPT calculation
-
-```{r load_hep_data}
-#seurat_integrated <- readRDS("TCF_Knockout_seurat-obj.rds")
-hepatocyte_obj <- subset(x = seurat_integrated, subset = `seurat_clusters` ==  c('0','1','2')) #7 not included due to distance on UMAP and 6 due to presence of other markers
-#saveRDS(hepatocyte_obj,"hepatocyte_obj.rds")
-#hepatocyte_obj <- readRDS("hepatocyte_obj.rds")
+```{r S2E}
+d <- as.data.frame(table(seurat_integrated@meta.data$perturbation, seurat_integrated@meta.data$cluster_named, seurat_integrated@meta.data$sample))
+colnames(d) <- c("Condition","Cluster","Sample","Cell Count")
+d<-d[-which(d$`Cell Count`==0),]
+x<-aggregate(d$`Cell Count`,by=list(c(d$Sample)),sum)
+colnames(x)<-c("Sample","Sample Sum")
+d<-merge(d,x,by="Sample")
+d$pct<-100*d$`Cell Count`/d$`Sample Sum`
+d$Cluster <- factor(d$Cluster, levels = c("HEP1", "HEP2","ENDO","IMM1","MES","IMM2","CHOL"), ordered = TRUE)
+d[,c(1:3,6)]%>%write.csv("S2Edata.csv",row.names=F)
 ```
 
-```{r do_dpt}
-dm <- DiffusionMap(Embeddings(hepatocyte_obj, "pca")[,1:12])
-dpt <- DPT(dm)
+## Umap
 
-hepatocyte_obj$dpt <- rank(dpt$dpt)
-dpt_vals <- hepatocyte_obj$dpt
+```{r F2B}
+Idents(seurat_integrated) <- "cluster_named"
+cluster_named_plot <- DimPlot(seurat_integrated, reduction = "umap", label = F, pt.size = 0.5)# + NoLegend() + theme(axis.line =element_blank(),axis.text =element_blank(),axis.title =element_blank(),axis.ticks = element_blank())
+cluster_named_plot
 
-hepatocyte_obj$dpt <- -((dpt_vals)/max(dpt_vals))*8+9
-
-meta <- hepatocyte_obj@meta.data
-
-tmp <- data.frame(DC1 = eigenvectors(dm)[, 1],
-                  DC2 = eigenvectors(dm)[, 2],
-                  DC3 = eigenvectors(dm)[, 3],
-                  DC4 = eigenvectors(dm)[, 4],
-                  cluster = hepatocyte_obj$seurat_clusters,
-                  dpd = dpt_vals)
-
-dc_scatter_by_dpd <- ggplot(tmp, aes(x = DC1, y = DC2, colour = dpd)) + geom_point() + 
-                            xlab("DC 1") + ylab("DC 2") + theme_few()
-dc_scatter_by_cluster <- ggplot(tmp, aes(x = DC1, y = DC2, colour=cluster)) + geom_point() +
-                            xlab("DC 1") + ylab("DC 2") + theme_few()
-dc_scatter_by_cluster
-ggsave("scatter_cluster.png",last_plot())
-dc_scatter_by_dpd
-ggsave("scatter_dpd.png",last_plot())
+ggsave(paste0("umap_clusters_012.png"), cluster_named_plot, units = 'in', width = 6, height = 6, dpi = 250)
 ```
+
+```{r S2A-C}
+FeaturePlot(seurat_integrated,
+            reduction = "umap",
+            features = "nFeature_RNA",
+            pt.size = 0.4,
+            order = TRUE,
+            min.cutoff = 'q10')# + NoLegend() + theme(axis.line =element_blank(),axis.text =element_blank(),axis.title =element_blank(),axis.ticks = element_blank())+labs(title=element_blank())
+ggsave("umap_nfeature.png",last_plot(), units = 'in', width = 6, height = 6, dpi = 250)
+
+Idents(seurat_integrated) <- "perturbation"
+DimPlot(seurat_integrated,label = F, split.by = "perturbation")# + NoLegend()+ theme(axis.line =element_blank(),axis.text =element_blank(),axis.title =element_blank(),axis.ticks = element_blank())+labs(title=element_blank())+theme(strip.text.x = element_blank() )
+ggsave("umap_perturbation.png",last_plot(), units = 'in', width = 8.48, height = 4.24, dpi = 250)
+
+
+seurat_integrated <- CellCycleScoring(
+     seurat_integrated,
+     s.features = str_to_title(cc.genes$s.genes),
+     g2m.features = str_to_title(cc.genes$g2m.genes),
+     assay = 'RNA',
+     set.ident = TRUE)
+
+Idents(seurat_integrated) <- "Phase"
+DimPlot(seurat_integrated, 
+        label = F, split.by = "Phase",ncol = 3)#  + NoLegend()+ theme(axis.line =element_blank(),axis.text =element_blank(),axis.title =element_blank(),axis.ticks = element_blank())+labs(title=element_blank())+theme(strip.text.x = element_blank() )
+ggsave("umap_cycle.png",last_plot(), units = 'in', width = 10.38, height = 3.46, dpi = 250)
+
+
+Idents(seurat_integrated) <- "sample"
+levels(seurat_integrated)
+colorlist <- c("#B6992D","#8CD17D","#4E79A7","#F28E2B","#A0CBE8","#F1CE63","#86BCB6","#FFBE7D","#3F8455","#3E4087")
+samsplit <- SplitObject(seurat_integrated, split.by = "sample")
+for (i in 1:nlevels(Idents(seurat_integrated))) {
+  DimPlot(samsplit[[i]],label = FALSE, split.by = "sample",cols=c(colorlist[i]),ncol = 3)#  + NoLegend()+ theme(axis.line =element_blank(),axis.text =element_blank(),axis.title =element_blank(),axis.ticks = element_blank())+labs(title=element_blank())+theme(strip.text.x = element_blank() )
+  ggsave(paste("umap_sample",toString(i),".png"),last_plot(), units = 'in', width = 6, height = 6, dpi = 250)
+}
+```
+
+# Hepatocytes Only
+
+## Subset
+
+```{r subsetheponly}
+Idents(seurat_integrated) <- "seurat_clusters"
+# DimPlot(seurat_integrated, reduction = "umap", label = F, pt.size = 0.5)
+sub_obj <- subset(x = seurat_integrated, idents =  c("0","1"))
+DefaultAssay(sub_obj) <- "RNA"
+```
+
+## UMAPs
+
+```{r umap}
+DimPlot(sub_obj,reduction = "umap",label = TRUE,label.size = 6)
+ggsave("umap_2hepclustersonly.png",last_plot())
+```
+
+```{r F2C}
+genes <- read_csv("gene_sets/pp_vs_pc.csv")
+sub_obj$PCavg <- colMeans(x=sub_obj@assays$RNA@scale.data[genes$Pericentral[1:9],],na.rm= TRUE)
+#
+sub_obj$PPavg <- colMeans(x = sub_obj@assays$RNA@scale.data[genes$Periportal, ], na.rm = TRUE)
+
+p <- FeaturePlot(sub_obj,
+            reduction = "umap",
+            features = c('PCavg','PPavg'),
+            slot = "data",
+            pt.size = 0.15,
+            order = T,
+            #min.cutoff = 'q10',
+            ncol = 1,
+            keep.scale = "feature",
+            blend=T,
+            blend.threshold = 0.25,
+            split.by = "perturbation",
+            #combine=F,
+            cols=c('#F6F6F6','#408697','#8F0009'),
+            label = FALSE)
+p3 <- p[[7]]+theme(axis.title = element_blank(),axis.ticks=element_blank(),axis.text = element_blank(),axis.line = element_blank())+labs(title=element_blank(),y=element_blank(),x=element_blank())+ theme(plot.margin = unit(c(0, 0, 0, 0), "cm"))+coord_fixed()
+
+p6 <- p[[3]]+theme(axis.title = element_blank(),axis.ticks=element_blank(),axis.text = element_blank(),axis.line = element_blank())+labs(title=element_blank(),y=element_blank(),x=element_blank())+ theme(plot.margin = unit(c(0, 0, 0, 0), "cm"))+coord_fixed()
+x <- p[[4]]
+x <- p[[4]]$data
+x <- x[x$rows%in%c(1,5,10)&x$cols%in%c(1,5,10),]
+x[x$rows==1,]$rows <- "Low"
+x[x$rows==5,]$rows <- "Med"
+x[x$rows==10,]$rows <- "High"
+x[x$cols==1,]$cols <- "Low"
+x[x$cols==5,]$cols <- "Med"
+x[x$cols==10,]$cols <- "High"
+row.names(x) <- NULL
+p7 <- ggplot(x,aes(x=fct_inorder(rows),y=fct_inorder(cols),fill=vals))+theme_classic()+geom_raster()+scale_fill_manual(values = c(p[[4]]$plot_env$color.matrix[c(1,5,10),c(1,5,10)]))+NoLegend()+labs(title = element_blank(),x=element_blank(),y=element_blank())+theme(axis.title = element_blank(),title = element_blank(),axis.text = element_blank(),axis.line =element_blank(),axis.ticks = element_blank())+coord_fixed()
+
+p3+ panel_border(remove = TRUE)
+ggsave("umap_pcvpp_012_avgzscoretest_nolabels_WT_final.png",last_plot(),width = 6, height=6,dpi=250, bg = "white")
+p6+ panel_border(remove = TRUE)
+ggsave("umap_pcvpp_012_avgzscoretest_nolabels_KO_final.png",last_plot(),width = 6, height=6,dpi=250, bg = "white")
+p7+ panel_border(remove = TRUE)
+ggsave("umap_pcvpp_012_avgzscoretest_nolabels_legend_final.png",last_plot(),width = 6, height=6,dpi=250, bg = "white")
+```
+
+## MSigDB
+
+```{r F3AS3A}
+sub_obj <- subset(x = seurat_integrated, idents =  c("0"))#periportal cluster
+avg_expr <- as.data.frame(AverageExpression(sub_obj, group.by="sample")$SCT)
+
+avg_expr <- add_column(avg_expr, NAME=rownames(avg_expr), .before=1)
+avg_expr <- avg_expr %>%rowwise()%>%mutate(S2RsdW=max(abs(mean(c_across("Mm_liver_WT_01-2":"Mm_liver_WT_05-1")))*0.2,sd(c_across("Mm_liver_WT_01-2":"Mm_liver_WT_05-1"))))#
+avg_expr <- avg_expr %>%rowwise()%>%mutate(S2Rsdko=max(abs(mean(c_across("Mm_liver_TCF4-KO_06-2":"Mm_liver_TCF4-KO_10-1")))*0.2,sd(c_across("Mm_liver_TCF4-KO_06-2":"Mm_liver_TCF4-KO_10-1"))))
+avg_expr <- avg_expr %>%rowwise()%>%mutate(S2R=(mean(c_across("Mm_liver_TCF4-KO_06-2":"Mm_liver_TCF4-KO_10-1"))-mean(c_across("Mm_liver_WT_01-2":"Mm_liver_WT_05-1")))/(S2Rsdko+S2RsdW))
+
+write.table(avg_expr, "cluster_0_KO_vs_WT_res012_results.txt", sep="\t", quote=FALSE, row.names=FALSE)
+
+sub_obj <- subset(x = seurat_integrated, idents =  c("1"))#pericentral cluster
+avg_expr <- as.data.frame(AverageExpression(sub_obj, group.by="sample")$SCT)
+
+avg_expr <- add_column(avg_expr, NAME=rownames(avg_expr), .before=1)
+avg_expr <- avg_expr %>%rowwise()%>%mutate(S2RsdW=max(abs(mean(c_across("Mm_liver_WT_01-2":"Mm_liver_WT_05-1")))*0.2,sd(c_across("Mm_liver_WT_01-2":"Mm_liver_WT_05-1"))))#
+avg_expr <- avg_expr %>%rowwise()%>%mutate(S2Rsdko=max(abs(mean(c_across("Mm_liver_TCF4-KO_06-2":"Mm_liver_TCF4-KO_10-1")))*0.2,sd(c_across("Mm_liver_TCF4-KO_06-2":"Mm_liver_TCF4-KO_10-1"))))
+avg_expr <- avg_expr %>%rowwise()%>%mutate(S2R=(mean(c_across("Mm_liver_TCF4-KO_06-2":"Mm_liver_TCF4-KO_10-1"))-mean(c_across("Mm_liver_WT_01-2":"Mm_liver_WT_05-1")))/(S2Rsdko+S2RsdW))
+
+write.table(avg_expr, "cluster_1_KO_vs_WT_res012_results.txt", sep="\t", quote=FALSE, row.names=FALSE)
+```
+
+## WTvsKOvsPCvsPP
+
+```{r WTvsKOvsPCvsPP}
+Idents(seurat_integrated) <- "seurat_clusters"
+sub_obj <- subset(x = seurat_integrated, idents =  c("0","1"))
+# get average expression for pc vs pp for both KO and WT
+avgexp <- as.data.frame(AverageExpression(sub_obj,assays="RNA",group.by=c("seurat_clusters","perturbation")))
+avgexp$gene <- row.names(avgexp)
+# prep t tests
+meta <- sub_obj@meta.data[c('seurat_clusters','perturbation')]
+exp_df <- sub_obj@assays$RNA@data[,] %>% as.matrix() %>% t() %>% as.data.frame()
+df <- merge(meta, exp_df, by = 0)
+genes <- rownames(sub_obj)
+rm(sub_obj,seurat_integrated)
+
+# run t tests
+## WT PC vs PP
+sub_df <- df[df$perturbation=="WT",]
+names(sub_df)[length(names(sub_df))]
+names1 <- rbindlist(list(lapply(names(sub_df)[-c(1,2,3)],function(x) x)))%>%t()%>%as.data.frame()#
+results1 <- lapply(names(sub_df)[-c(1,2,3)],function(x) tryCatch(t.test(as.formula(paste(paste0("`",x,"`"),"seurat_clusters",sep="~")),data=sub_df)[[3]], error=function(e) NaN)) #NaN[-c(1,2,length(names(sub_df)))]
+results1df <- rbindlist(list(results1))%>%t()%>%as.data.frame()
+results1df$gene <- names1$V1
+colnames(results1df) <- c('WT p-value','gene')
+## KO PC vs PP
+sub_df <- df[df$perturbation=="KO",]
+names2 <- rbindlist(list(lapply(names(sub_df)[-c(1,2,3)],function(x) x)))%>%t()%>%as.data.frame()#
+results2 <- lapply(names(sub_df)[-c(1,2,3)],function(x) tryCatch(t.test(as.formula(paste(paste0("`",x,"`"),"seurat_clusters",sep="~")),data=sub_df)[[3]], error=function(e) NaN))
+results2df <- rbindlist(list(results2))%>%t()%>%as.data.frame()
+results2df$gene <- names2$V1
+colnames(results2df) <- c('KO p-value','gene')
+## PC WT vs KO
+sub_df <- df[df$seurat_clusters=="1",]
+names3 <- rbindlist(list(lapply(names(sub_df)[-c(1,2,3)],function(x) x)))%>%t()%>%as.data.frame()#
+results3 <- lapply(names(sub_df)[-c(1,2,3)],function(x) tryCatch(t.test(as.formula(paste(paste0("`",x,"`"),"perturbation",sep="~")),data=sub_df)[[3]], error=function(e) NaN))
+length(results3)
+results3df <- rbindlist(list(results3))%>%t()%>%as.data.frame()
+results3df$gene <- names3$V1
+colnames(results3df) <- c('PC p-value','gene')
+## PP WT vs KO
+sub_df <- df[df$seurat_clusters=="0",]
+names4 <- rbindlist(list(lapply(names(sub_df)[-c(1,2,3)],function(x) x)))%>%t()%>%as.data.frame()#
+results4 <- lapply(names(sub_df)[-c(1,2,3)],function(x) tryCatch(t.test(as.formula(paste(paste0("`",x,"`"),"perturbation",sep="~")),data=sub_df)[[3]], error=function(e) NaN))
+results4df <- rbindlist(list(results4))%>%t()%>%as.data.frame()
+results4df$gene <- names4$V1
+colnames(results4df) <- c('PP p-value','gene')
+# results[,c("PC WT","PC KO","PP WT","PP KO")] <- c(avgexp$RNA.1_WT,avgexp$RNA.1_KO,avgexp$RNA.0_WT,avgexp$RNA.0_KO)
+results <- merge(results1df,results2df)
+results <- merge(results,results3df)
+results <- merge(results,results4df)
+results <- merge(results,avgexp)
+colnames(results) <- c('gene','WT (PC vs PP) p-value','KO (PC vs PP) p-value','PC (WT vs KO) p-value','PP (WT vs KO) p-value','PP KO','PP WT','PC KO', 'PC WT')#,'WT (PC vs PP) log2fc','KO (PC vs PP) log2fc','PC (WT vs KO) log2fc','PP (WT vs KO) log2fc'
+
+
+results$`WT (PC vs PP) FDR` <- p.adjust(results$`WT (PC vs PP) p-value`,method="BH")
+results$`KO (PC vs PP) FDR` <- p.adjust(results$`KO (PC vs PP) p-value`,method="BH")
+results$`PC (WT vs KO) FDR` <- p.adjust(results$`PC (WT vs KO) p-value`,method="BH")
+results$`PP (WT vs KO) FDR` <- p.adjust(results$`PP (WT vs KO) p-value`,method="BH")
+
+colnames(results) <- c('gene','WT (PC vs PP) p-value','KO (PC vs PP) p-value','PC (WT vs KO) p-value','PP (WT vs KO) p-value','PP KO','PP WT','PC KO', 'PC WT',"WT (PC vs PP) FDR","KO (PC vs PP) FDR","PC (WT vs KO) FDR",'PP (WT vs KO) FDR')#,'WT (PC vs PP) log2fc','KO (PC vs PP) log2fc','PC (WT vs KO) log2fc','PP (WT vs KO) log2fc'
+results[results$`PP KO`==0,]$`PP KO` <- 10^-5
+results[results$`PC KO`==0,]$`PC KO` <- 10^-5
+results[results$`PP WT`==0,]$`PP WT` <- 10^-5
+results[results$`PC WT`==0,]$`PC WT` <- 10^-5
+
+results$`WT (PC vs PP) log2fc` <- log2(results$`PC WT`/results$`PP WT`)
+results$`KO (PC vs PP) log2fc` <- log2(results$`PC KO`/results$`PP KO`)
+results$`PC (WT vs KO) log2fc` <- log2(results$`PC WT`/results$`PC KO`)
+results$`PP (WT vs KO) log2fc` <- log2(results$`PP WT`/results$`PP KO`)
+
+
+
+results%>%write_csv("avgexpttest.csv")
+results <- read.csv("avgexpttest.csv")
+colnames(results) <- c('gene','WT (PC vs PP) p-value','KO (PC vs PP) p-value','PC (WT vs KO) p-value','PP (WT vs KO) p-value','PP KO','PP WT','PC KO', 'PC WT',"WT (PC vs PP) FDR","KO (PC vs PP) FDR","PC (WT vs KO) FDR",'PP (WT vs KO) FDR','WT (PC vs PP) log2fc','KO (PC vs PP) log2fc','PC (WT vs KO) log2fc','PP (WT vs KO) log2fc')
+
+splitobj <- SplitObject(sub_obj, split.by = "perturbation")
+just_WT <- splitobj$WT
+just_KO <- splitobj$KO
+splitobj <- SplitObject(sub_obj, split.by = "seurat_clusters")
+just_PP <- splitobj$`0`
+just_PC <- splitobj$`1`
+
+PCcells <- rowSums(GetAssayData(object = just_PC, slot = "data")[,]>0)
+PCcells <- data.frame(PCcells)
+PCcells$'gene' <-  rownames(PCcells)
+PPcells <- rowSums(GetAssayData(object = just_PP, slot = "data")[,]>0)
+PPcells <- data.frame(PPcells)
+PPcells$'gene' <-  rownames(PPcells)
+KOcells <- rowSums(GetAssayData(object = just_KO, slot = "data")[,]>0)
+KOcells <- data.frame(KOcells)
+KOcells$'gene' <-  rownames(KOcells)
+WTcells <- rowSums(GetAssayData(object = just_WT, slot = "data")[,]>0)
+WTcells <- data.frame(WTcells)
+WTcells$'gene' <-  rownames(WTcells)
+cells <- merge(WTcells,KOcells,by='gene')
+cells <- merge(cells,PCcells,by='gene')
+cells <- merge(cells,PPcells,by='gene')
+cresults <- merge(results,cells,by='gene')
+cresults%>%write_csv("avgexpttest_withcells.csv")
+```
+
+```{r F2D}
+cresults <- read.csv("avgexpttest_withcells.csv")
+colnames(cresults) <- c('gene','WT (PC vs PP) p-value','KO (PC vs PP) p-value','PC (WT vs KO) p-value','PP (WT vs KO) p-value','PP KO','PP WT','PC KO', 'PC WT',"WT (PC vs PP) FDR","KO (PC vs PP) FDR","PC (WT vs KO) FDR",'PP (WT vs KO) FDR','WT (PC vs PP) log2fc','KO (PC vs PP) log2fc','PC (WT vs KO) log2fc','PP (WT vs KO) log2fc',"WTcells","KOcells","PCcells","PPcells")
+cresults$WTcells <- cresults$WTcells/9336
+cresults$KOcells <- cresults$KOcells/9781
+
+fdr <- pivot_longer(cresults[,c(1,10,11)],cols=c(2,3),names_to = ('genotype'))
+colnames(fdr)[3] <- "FDR"
+fdr$genotype <- substr(fdr$genotype,1,2)
+cells <- pivot_longer(cresults[,c(1,18,19)],cols=c(2,3),names_to = ('genotype'))
+colnames(cells)[3] <- "Cells"
+cells$genotype <- substr(cells$genotype, 1, 2)
+fc <- pivot_longer(cresults[,c(1,14,15)],cols=c(2,3),names_to = ('genotype'))
+colnames(fc)[3] <- "Log2FC"
+fc$genotype <- substr(fc$genotype,1,2)
+results <- merge(fdr,cells)
+results <- merge(results,fc)
+results <- results[results$FDR<0.05&results$Cells>0.1,]
+rs <- results[,c(1,2,5)]
+resultsw <- pivot_wider(rs,names_from = genotype,values_from = Log2FC)
+
+ggplot(resultsw,aes(x=WT,y=KO))+ coord_axes_inside(labels_inside = TRUE) +geom_point(color="#8d8c8a") +geom_smooth(method='lm',color="#8f0009",linewidth=1.5,se=F,fullrange=F) +geom_segment(x=-6,y=-6,xend=6,yend=6,linetype=2,linewidth=1.5)+scale_y_continuous(limits = c(-6,6),minor_breaks = NULL,breaks=c(-6,-3,0,3,6))+scale_x_continuous(limits = c(-6,6),minor_breaks = NULL,breaks=c(-6,-3,0,3,6))#+theme_classic()+labs(title=element_blank(),y=element_blank(),x=element_blank())+theme(axis.text = element_blank(),axis.line = element_line(colour = 'black', size = 1.5),axis.ticks = element_line(colour = 'black', size = 1.5),axis.ticks.length = unit(0.3,"cm"))#slope = 1,intercept = 0
+ggsave("fcWTvKO_10pct_8f009fullrange.png",width=6, height=6)#,dpi=1200)
+```
+
+# Reintegrated Hepatocyte Object
+
+## Reintegrating
 
 ```{r reintegrate}
-hepatocyte_obj_reint <- normalize_integrate(hepatocyte_obj,c("mt.percent","nCount_RNA","nFeature_RNA"),3000)
-hepatocyte_obj_reint <- postintegrate(hepatocyte_obj_reint,30,0.75)
+hepatocyte_obj <- subset(x = seurat_integrated, subset = (cluster_named%in%c("HEP1","HEP2")))
+reint_anchs <- normalize(hepatocyte_obj,c("mt.percent","nFeature_RNA","nCount_RNA"),3000)
+rm(hepatocyte_obj,seurat_integrated,seurat_obj)
+saveRDS(reint_anchs,"reint_anchs_012.rds")
+reint_anchs <- readRDS("reint_anchs_012.rds")
+hepatocyte_obj_reint <- integrate(reint_anchs)
+hepatocyte_obj_reint <- postintegrate(hepatocyte_obj_reint,30,0.9)
+saveRDS(hepatocyte_obj_reint,"hepatocyte_obj_reint_mtcountfeat_prefiltering.rds")
+hepatocyte_obj_reint <- readRDS("hepatocyte_obj_reint_mtcountfeat_prefiltering.rds")
+tapply(hepatocyte_obj_reint$seurat_clusters,hepatocyte_obj_reint$seurat_clusters,length)#print cells per cluster
+
+Idents(hepatocyte_obj_reint) <- "seurat_clusters"
+DimPlot(hepatocyte_obj_reint,reduction = "umap",label = TRUE,label.size = 6)
+ggsave("umap_012_hepreint_prefiltering.png",last_plot())
 ```
 
-```{r do_dpt_again}
+```{r dpt}
+hepatocyte_obj_reint <- subset(x = hepatocyte_obj_reint, idents =  c("0","1","2","3","4","5","6","7","8","9","10","11","12","13","16"))#,"14","15","17","18"
 DimPlot(hepatocyte_obj_reint,reduction = "umap",label = TRUE,label.size = 6)
+
+
 ggsave("umap_reint.png",last_plot())
-hepatocyte_obj_reint <- subset(x = hepatocyte_obj_reint, subset = `seurat_clusters` ==  c('0','1','2','3','4','5','6','7'))
-dm <- DiffusionMap(Embeddings(hepatocyte_obj_reint, "pca")[,1:12])
+dm <- DiffusionMap(Embeddings(hepatocyte_obj_reint, "pca")[,1:20])
 dpt <- DPT(dm)
 
 hepatocyte_obj_reint$dpt <- rank(dpt$dpt)
 dpt_vals <- hepatocyte_obj_reint$dpt
 
-hepatocyte_obj_reint$dpt <- ((dpt_vals)/max(dpt_vals))*8+1
+hepatocyte_obj_reint$dpt <- -((dpt_vals-min(dpt_vals))/(max(dpt_vals)-min(dpt_vals)))+1
+hepatocyte_obj_reint$dpt <- hepatocyte_obj_reint$dpt*8+1
+
 
 meta <- hepatocyte_obj_reint@meta.data
 
@@ -575,129 +635,359 @@ dc_scatter_by_dpd <- ggplot(tmp, aes(x = DC1, y = DC2, colour = dpd)) + geom_poi
 dc_scatter_by_cluster <- ggplot(tmp, aes(x = DC1, y = DC2, colour=cluster)) + geom_point() +
                             xlab("DC 1") + ylab("DC 2") + theme_few()
 dc_scatter_by_cluster
-ggsave("scatter_cluster_reint.png",last_plot())
+ggsave("scatter_cluster_012_reint.png",last_plot())
 dc_scatter_by_dpd
-ggsave("scatter_dpd_reint.png",last_plot())
+ggsave("scatter_dpd_012_reint.png",last_plot())
 
-FeaturePlot(hepatocyte_obj_reint, 
-            reduction = "umap", 
-            features = c("Glul","Cyp2f2"),
-            pt.size = 0.2, 
-            order = TRUE,
-            min.cutoff = 'q10',
-            ncol = 2,
-            label = FALSE)
-ggsave("reint_feature_centralportal.png",last_plot())
+DefaultAssay(hepatocyte_obj_reint) <- "RNA"
+hepatocyte_obj_reint <- NormalizeData(hepatocyte_obj_reint)
+hepatocyte_obj_reint <- ScaleData(hepatocyte_obj_reint)
+min(hepatocyte_obj_reint@assays$RNA@data)
+dpt_vals <- hepatocyte_obj_reint$dpt
+hepatocyte_obj_reint$dpt <- ((dpt_vals-min(dpt_vals))/(max(dpt_vals)-min(dpt_vals)))#-+1
+hepatocyte_obj_reint$dpt <- hepatocyte_obj_reint$dpt*8
+hepatocyte_obj_reint$binneddptgeno <- as.factor(paste0(hepatocyte_obj_reint$perturbation,"_",ceiling(hepatocyte_obj_reint$dpt)))
+table(hepatocyte_obj_reint$binneddptgeno)
+hepatocyte_obj_reint@meta.data$binneddptgeno[which(hepatocyte_obj_reint@meta.data$binneddptgeno == "KO_0")] <- "KO_1" # moves the one cell in bin KO_1 to KO_2
+table(hepatocyte_obj_reint$binneddptgeno)
+saveRDS(hepatocyte_obj_reint,"hepatocyte_obj_012_reint_mtcountfeat.rds")
 ```
 
-# DPT Plots: KO vs. WT
+## Zonated Genes
 
-```{r one_gene_dpt_fn}
-plot_gene_dpt_solo <- function(seurat_obj, gene) {
-  seurat_obj <- SplitObject(seurat_obj, split.by = "perturbation")
-  metaKO <- seurat_obj$KO@meta.data
-  exp_df_KO <- seurat_obj$KO@assays$RNA@data[gene,] %>% as.matrix() %>% t() %>% as.data.frame()
-  exp_df_KO <- t(exp_df_KO)
-  dfKO <- merge(metaKO, exp_df_KO, by = 0)
-  fittedKO <- ggplot(dfKO, aes(dpt, V1)) + geom_smooth(se = F, method = "loess")
+```{r getzonatedgenes gam}
+just_WT <- SplitObject(hepatocyte_obj_reint, split.by = "perturbation")
+just_WT <- just_WT$WT
+WT_genes <- rownames(just_WT)
+WT_meta <- just_WT@meta.data['dpt']
+exp_df <- just_WT@assays$RNA@data[WT_genes,] %>% as.matrix() %>% t() %>% as.data.frame()
+WT_df <- merge(WT_meta, exp_df, by = 0)
 
-  metaWT <- seurat_obj$WT@meta.data
-  exp_df_WT <- seurat_obj$WT@assays$RNA@data[gene,] %>% as.matrix() %>% t() %>% as.data.frame()
-  exp_df_WT <- t(exp_df_WT)
-  dfWT <- merge(metaWT, exp_df_WT, by = 0)
-  fittedWT <- ggplot(dfWT, aes(dpt, V1)) + geom_smooth(se = F, method = "loess")
+just_KO <- SplitObject(hepatocyte_obj_reint, split.by = "perturbation")
+just_KO <- just_KO$KO
+KO_genes <- rownames(just_KO)
+KO_meta <- just_KO@meta.data['dpt']
+exp_df <- just_KO@assays$RNA@data[KO_genes,] %>% as.matrix() %>% t() %>% as.data.frame()
+KO_df <- merge(KO_meta, exp_df, by = 0)
 
-  plot_dataKO <- ggplot_build(fittedKO)$data[[1]]
-  plot_dataWT <- ggplot_build(fittedWT)$data[[1]]
 
-  lbls <- c()
-  for(i in 1:9){
-    if(i%%1 == 0){lbls <- append(lbls,i)}
-    else if(i%%1==0){lbls <- append(lbls,"")}}
+genes <- intersect(WT_genes, KO_genes)
+columns <- genes
 
-  plot_data <- plot_dataKO %>%  mutate(Type = 'Knockout') %>% bind_rows(plot_dataWT %>% mutate(Type = 'Wild Type'))
-  full_plot <- ggplot(data = plot_data, aes(x=x, y=y, group_by(Type))) + geom_line(aes(linetype=Type)) + scale_y_continuous('Expression') + scale_x_continuous("Diffusion pseudodistance", breaks = seq(1,9,by=1), labels=lbls)  + theme(plot.title=element_text(hjust=0.5)) +  ggtitle(gene) + theme_few()
+KO_sig_dpt_heatmap <- data.frame(matrix(nrow = 80, ncol = length(columns)))
+WT_sig_dpt_heatmap <- data.frame(matrix(nrow = 80, ncol = length(columns)))
+
+colnames(WT_sig_dpt_heatmap) <- columns
+colnames(KO_sig_dpt_heatmap) <- columns
+
+KO_sig_pval <- data.frame(matrix(ncol = 1, nrow = length(columns)))
+WT_sig_pval <- data.frame(matrix(ncol = 1, nrow = length(columns)))
+
+rownames(KO_sig_pval) <- columns
+rownames(WT_sig_pval) <- columns
+
+for (g in genes) {
+
+  WT_plot_df <- WT_df %>% dplyr::select(gene = g, dpt)
+  KO_plot_df <- KO_df %>% dplyr::select(gene = g, dpt)
   
-  return(full_plot)
+  WT_plot <- ggplot(WT_plot_df, aes(dpt, gene)) +
+                geom_smooth(se = F, method = "gam") +
+                ggtitle(g) +
+                theme_few() +
+                theme(axis.title.x=element_blank(), axis.title.y=element_blank(), 
+                  axis.text.x=element_blank(), axis.ticks.x = element_blank())
+  
+  KO_plot <- ggplot(KO_plot_df, aes(dpt, gene)) +
+                  geom_smooth(se = F, method = "gam") +
+                  ggtitle(g) +
+                  theme_few() +
+                  theme(axis.title.x=element_blank(), axis.title.y=element_blank(), 
+                    axis.text.x=element_blank(), axis.ticks.x = element_blank())
+  
+  WT_data <- ggplot_build(WT_plot)$data[[1]]
+  KO_data <- ggplot_build(KO_plot)$data[[1]]
+  
+  WT_sig_dpt_heatmap[,g] <- WT_data$y
+  KO_sig_dpt_heatmap[,g] <- KO_data$y
+  
+  WT_tmp <- gam(gene ~ s(dpt), data=WT_plot_df)
+  WT_p_val <- summary(WT_tmp)[4][[1]][1,5]
+  
+  KO_tmp <- gam(gene ~ s(dpt), data=KO_plot_df)
+  KO_p_val <- summary(KO_tmp)[4][[1]][1,5]
+  
+  WT_sig_pval[g,1] <- WT_p_val
+  KO_sig_pval[g,1] <- KO_p_val
+  
 }
+
+# Filter based off of p-value
+colnames(WT_sig_pval) <- c("p_val")
+colnames(KO_sig_pval) <- c("p_val")
+
+WT_sig_pval$p_val <- p.adjust(WT_sig_pval$p_val, method="bonferroni", 
+                                n=length(WT_sig_pval$p_val))
+KO_sig_pval$p_val <- p.adjust(KO_sig_pval$p_val, method="bonferroni", 
+                                   n=length(KO_sig_pval$p_val))
+
+WT_sig_genes <- WT_sig_pval[WT_sig_pval$p_val < 0.05, , drop=FALSE]
+KO_sig_genes <- KO_sig_pval[KO_sig_pval$p_val < 0.05, , drop=FALSE]
+
+WT_sig_genes <- na.omit(WT_sig_genes)
+KO_sig_genes <- na.omit(KO_sig_genes)
+
+WT_sig_genes$gene <- row.names(WT_sig_genes)
+KO_sig_genes$gene <- row.names(KO_sig_genes)
+
+WT_sig_genes <- WT_sig_genes%>%rename('WT p val'=p_val)
+KO_sig_genes <- KO_sig_genes%>%rename('KO p val'=p_val)
+
+
+WT_sig_genes%>%write_csv("WTsigzonatedgenes.csv")
+KO_sig_genes%>%write_csv("KOsigzonatedgenes.csv")
+
+length(setdiff(KO_sig_genes$gene,WT_sig_genes$gene))
+
+zg <- merge(WT_sig_genes,KO_sig_genes,by='gene',all=T)
+zg%>%write_csv("sigzonatedgenes_012_correctdpt.csv")
 ```
 
-```{r list_genes_dpt_fn}
-plot_gene_dpt_list <- function(seurat_obj, genelist){
-  for (gene in genelist){
-    p1 <- plot_gene_dpt_solo(seurat_obj,gene)
-    plot(p1)
+```{r F2E}
+length(zg$KO.p.val)
+length(zg$WT.p.val)-sum(is.na(zg$WT.p.val))
+length(zg$KO.p.val)-sum(is.na(zg$KO.p.val))
+zg2 <- na.omit(zg)
+length(zg2$KO.p.val)
+zgKO <- na.omit(zg[,c(1,3)])
+zgWT <- na.omit(zg[,c(1,2)])
+length(setdiff(zgKO$gene,zgWT$gene))
+length(setdiff(zgWT$gene,zgKO$gene))
+length(intersect(zgWT$gene,zgKO$gene))
+length(zg2$WT.p.val)-sum(is.na(zg2$WT.p.val))
+length(zg$KO.p.val)-sum(is.na(zg2$KO.p.val))
+spl <- SplitObject(hepatocyte_obj_reint,split.by="perturbation")
+length(row.names(spl$KO))
+sum(!is.na(zg$WT.p.val))/sum(rowSums(spl$WT@assays$RNA@data)>0)
+sum(!is.na(zg$KO.p.val))/sum(rowSums(spl$KO@assays$RNA@data)>0)
+sum(!is.na(zg$gene))/sum(rowSums(hepatocyte_obj_reint@assays$RNA@data)>0)
+```
+
+```{r F2F}
+zg <- read.csv("sigzonatedgenes_012_correctdpt.csv")
+
+zonatedgenes <- intersect(zg$gene,row.names(hepatocyte_obj_reint@assays$RNA@data))
+meta <- hepatocyte_obj_reint@meta.data
+exp_df <- hepatocyte_obj_reint@assays$RNA@data[zonatedgenes,] %>% t() %>% as.data.frame() # %>% as.matrix() #
+df <- merge(meta, exp_df, by = 0)
+vgroupg <- aggregate(df, list(df$binneddptgeno), FUN=mean)
+heatmap <- as.data.frame(t(vgroupg[,c(1,30:length(colnames(vgroupg)))]))
+names(heatmap) <- lapply(heatmap[1, ], as.character)
+heatmap <- heatmap[-1,]
+heatmap <- heatmap[,c(9:16,1:8)]
+
+names <- lapply(
+  rownames(heatmap), function(x) 
+  bquote(italic(.(x ))))
+
+column_names <- matrix(nrow = 18, ncol = 1)
+column_names[1,] <- "Central"
+column_names[5,] <- "Mid"
+column_names[9,] <- "Portal"
+column_names[10,] <- "Central"
+column_names[14,] <- "Mid"
+column_names[18,] <- "Portal"
+
+for (i in 1:length(column_names)) {
+  if (is.na(column_names[i,])) {
+    column_names[i,] <- ""
   }
 }
-```
 
-```{r plot_dpt}
-plot_gene_dpt_list(hepatocyte_obj_reint,genes$Pericentral[!genes$Pericentral%in%c("Axin","Gpr49",NA)])
-ggsave("traces_pericentral.png",last_plot())
-plot_gene_dpt_list(hepatocyte_obj_reint,genes$Periportal)
-ggsave("traces_periportal.png",last_plot())
-```
+column_names <- lapply(
+  column_names,
+  function(x) bquote(bold(.(x ))))#capitalize
 
-# DPT Plots: Cumulative PC and Cumulative PP
-
-```{r cumulative_dpt_fn}
-plot_gene_dpt_cumulative <- function(seurat_obj, genelist,title) {
-  seurat_obj <- SplitObject(seurat_obj, split.by = "perturbation")
-  metaKO <- seurat_obj$KO@meta.data
-  exp_dfKO <- data.frame(matrix(ncol = 0, nrow = length(seurat_obj$KO@assays$RNA@data[genelist[1],])))
-  range <- 1:length(genelist)
-  for (i in range){
-    if(i==1){
-      exp_dfKO <- seurat_obj$KO@assays$RNA@data[genelist[i],] %>% as.matrix() %>% as.data.frame()
-    }
-  else{
-    exp_dfKO[genelist[i]] <- seurat_obj$KO@assays$RNA@data[genelist[i],] %>% as.matrix() %>% as.data.frame()
-    }
-  }
-  exp_dfKO["cumulative"] <- rowSums(exp_dfKO)
-  sumsKO <- exp_dfKO["cumulative"]
-  dfKO <- merge(metaKO, sumsKO, by = 0)
-  fittedKO <- ggplot(dfKO, aes(dpt, cumulative)) + geom_smooth(se = F, method = "loess")
-  plot_dataKO <- ggplot_build(fittedKO)$data[[1]]
-  
-  metaWT <- seurat_obj$WT@meta.data
-  exp_dfWT <- data.frame(matrix(ncol = 0, nrow = length(seurat_obj$WT@assays$RNA@data[genelist[1],])))
-  range <- 1:length(genelist)
-  for (i in range){
-    if(i==1){
-      exp_dfWT <- seurat_obj$WT@assays$RNA@data[genelist[i],] %>% as.matrix() %>% as.data.frame()
-    }
-  else{
-    exp_dfWT[genelist[i]] <- seurat_obj$WT@assays$RNA@data[genelist[i],] %>% as.matrix() %>% as.data.frame()
-    }
-  }
-  exp_dfWT["cumulative"] <- rowSums(exp_dfWT)
-  sumsWT <- exp_dfWT["cumulative"]
-  dfWT <- merge(metaWT, sumsWT, by = 0)
-  fittedWT <- ggplot(dfWT, aes(dpt, cumulative)) + geom_smooth(se = F, method = "loess")
-  plot_dataWT <- ggplot_build(fittedWT)$data[[1]]
-  
-  lbls <- c()
-  for(i in 1:9){
-    if(i%%3 == 0){lbls <- append(lbls,i)}
-    else if(i%%1==0){lbls <- append(lbls,"")}}
-  brks <- c()
-  for(i in 1:9){
-    if(i%%1 == 0){brks <- append(brks,i)}
-  }
-  plot_data <- plot_dataKO %>%  mutate(Type = 'Knockout') %>% bind_rows(plot_dataWT %>% mutate(Type = 'Wild Type'))
-  
-  full_plot <- ggplot(plot_data, aes(x=x, y=y, group_by(Type))) + 
-    geom_line(aes(linetype=Type)) +
-    scale_y_continuous('Expression') +
-    scale_x_continuous("Diffusion pseudodistance", breaks = brks, labels=lbls) + theme_few() + ggtitle(title) + theme(plot.title=element_text(hjust=0.5))
-  return(full_plot)
+heatmapm <- sapply(heatmap, as.numeric)
+if (min(heatmapm) < 0) {
+  heatmapm <- heatmapm + (-min(heatmapm))  
 }
+
+colnames(heatmap) <- c("WT_1","WT_2","WT_3","WT_4","WT_5","WT_6","WT_7","WT_8","KO_1","KO_2","KO_3","KO_4","KO_5","KO_6","KO_7","KO_8")
+colnames(heatmapm) <- c("WT_1","WT_2","WT_3","WT_4","WT_5","WT_6","WT_7","WT_8","KO_1","KO_2","KO_3","KO_4","KO_5","KO_6","KO_7","KO_8")
+
+phm <- pheatmap(heatmapm,
+         color = colorRampPalette(c('#408697','#F6F6F6','#8F0009'))(255),
+         scale = 'row',
+         fontsize = 16,
+         fontsize_row = 10,
+         fontsize_col = 10,
+         angle_col = "0",
+         cluster_rows = T,
+         cluster_cols = F,
+         border_color = NA,
+         cutree_rows = 4,
+         labels_col = " ",
+         annotation_names_row = F,
+        main = "WT                              KO",
+        filename = "zonated_binned_dpt_evenbins_correctgenes_heatmap_012_4.png",
+         width = 7, height = 12,legend=T)
+
+
+heatmap$cluster <- cutree(phm$tree_row, k = 4)
+heatmap$gene <- row.names(heatmap)
+heatmap <- heatmap[,c(17,18,1:16)]
+
+
+zg$WT <- !is.na(zg$WT.p.val)
+zg$KO <- !is.na(zg$KO.p.val)
+zg$sig <- ""
+zg[zg$WT,6] <- "CON ONLY"
+zg[zg$KO,6] <- "L-KO ONLY"
+zg[zg$WT&zg$KO,6] <- "BOTH"
+combined <- merge(heatmap,zg[,c(1,6)])
+combined <- combined[,c(1,2,19,3:18)]
+combined2 <- combined
+table(combined$cluster)
+combined2[combined2$cluster==3,2] <- "A"
+combined2[combined2$cluster==2,2] <- "B"
+combined2[combined2$cluster==1,2] <- "C"
+combined2[combined2$cluster==4,2] <- "D"
+table(combined$cluster)
+
+combined2%>%write_csv("clusteredsigzonatedgenes_evenbins_correctgenes.csv")
 ```
 
-```{r plot_cumulative_dpt}
-plot_gene_dpt_cumulative(hepatocyte_obj_reint,genes$Pericentral[!genes$Pericentral%in%c("Axin","Gpr49",NA)],"Pericentral")
-ggsave("cumul_trace_pericentral.png",last_plot())
-plot_gene_dpt_cumulative(hepatocyte_obj_reint,genes$Periportal,"Periportal")
-ggsave("cumul_trace_periportal.png",last_plot())
+## Glutamine/Glutamate Heatmap
+
+```{r F3B}
+reactome <- read.csv("ReactomePathways.csv")
+reactomet <- reactome %>% t() %>% as.data.frame()
+reactomet$V2656 <- rownames(reactomet)
+rownames(reactomet) <- NULL
+names(reactomet) <- reactomet[2,]
+reactomet <- reactomet[-2,]
+Mlistold <- c("Glul","Gls2","Nags","Cps1","Otc","Ass1","Asl","Arg1","Arg2")
+Mlistnew <- c("Slc1a2", "Glul", "Oat", "Gls2", "Cps1", "Otc", "Ass1", "Arg1", "Asl","Slc38a2", "Rhbg","Slc1a5", "Slc38a1","Slc38a2")
+ggenes <- union(str_to_title(as.data.frame(as.data.frame(as.data.frame(reactomet$`R-HSA-8964539`)[as.data.frame(reactomet$`R-HSA-8964539`)[1]!=""])[-1,])[,1]),Mlistold)
+ggenes <- union(ggenes,Mlistnew)
+ggenes <- intersect(ggenes,row.names(hepatocyte_obj_reint@assays$RNA@data))
+ggenes <- ggenes[!(ggenes %in% c("Glud1","Aco2","Idh2","Ogdh","Pycrl","Kyat1","Got2"))]#Not in pathway of interest
+x <- data.frame(t(hepatocyte_obj_reint@assays$RNA@data[ggenes,]))
+x$bdpt <- as.factor(hepatocyte_obj_reint$binneddptgeno)
+for (i in colnames(x[,1:20])){
+  if (i==colnames(x)[1]){
+    celldf <- aggregate(as.formula(paste0(i,"~bdpt")),x, function(x) sum(x >= 0, na.rm = TRUE))
+    colnames(celldf)[2] <- "totalcells"
+  }
+  celldf <- merge(celldf,aggregate(as.formula(paste0(i,"~bdpt")),x, function(x) sum(x > 0, na.rm = TRUE)))
+}
+celldf2 <- celldf/celldf[,2]
+celldf2 <- celldf2[,-c(1,2)]
+celldf3 <- celldf2[, colSums(celldf2 > 0.1) >= 1]#at least 10% of cells with UMI count>0 in at least one bin
+
+
+meta <- hepatocyte_obj_reint@meta.data
+ggenes <- intersect(ggenes,colnames(celldf3))
+exp_df <- hepatocyte_obj_reint@assays$RNA@data[ggenes,] %>% t() %>% as.data.frame() # %>% as.matrix() #
+df <- merge(meta, exp_df, by = 0)
+vgroupg <- aggregate(df, list(df$binneddptgeno), FUN=mean)
+heatmap <- as.data.frame(t(vgroupg[,c(1,30:length(colnames(vgroupg)))]))
+names(heatmap) <- lapply(heatmap[1, ], as.character)
+heatmap <- heatmap[-1,]
+heatmap <- heatmap[,c(9:16,1:8)]
+
+names <- lapply(
+  rownames(heatmap), function(x) 
+  bquote(italic(.(x ))))
+
+column_names <- matrix(nrow = 18, ncol = 1)
+column_names[1,] <- "Central"
+column_names[5,] <- "Mid"
+column_names[9,] <- "Portal"
+column_names[10,] <- "Central"
+column_names[14,] <- "Mid"
+column_names[18,] <- "Portal"
+
+for (i in 1:length(column_names)) {
+  if (is.na(column_names[i,])) {
+    column_names[i,] <- ""
+  }
+}
+
+column_names <- lapply(
+  column_names,
+  function(x) bquote(bold(.(x ))))
+
+heatmap <- sapply(heatmap, as.numeric)
+if (min(heatmap) < 0) {
+  heatmap <- heatmap + (-min(heatmap))  
+}
+pheatmap(heatmap,
+         color = colorRampPalette(c('#408697','#F6F6F6','#8F0009'))(255),
+         scale = 'row',
+         fontsize = 16,
+         fontsize_row = 10,
+         fontsize_col = 10,
+         angle_col = "0",
+         cluster_rows = T,
+         cluster_cols = F,
+         border_color = NA,
+         labels_row = as.expression(ggenes),
+         labels_col = "",
+         annotation_names_row = F,
+         treeheight_row = 50,
+         main = "WT                              KO",
+         filename = "filtered_10pctanybin_finallist_Gln_Heatmap.png",
+         width = 7, height = 4,legend=T)
+```
+
+## DPT Traces
+
+```{r S3B}
+df <- hepatocyte_obj_reint@assays$RNA@data
+colnm <- row.names(df)
+df <- data.frame(t(df))
+colnames(df) <- colnm
+hepatocyte_obj_reint$bdpt10 <- as.factor(paste0(hepatocyte_obj_reint$perturbation,"_",ceiling(((hepatocyte_obj_reint$dpt-min(hepatocyte_obj_reint$dpt))/(max(hepatocyte_obj_reint$dpt)-min(hepatocyte_obj_reint$dpt)))*10)))
+df$bdpt10 <- hepatocyte_obj_reint$bdpt10
+df[df$bdpt10 =='KO_0',]$bdpt10 <- 'KO_1' # moves the one cell in bin KO_0 to KO_1
+#levels(hepatocyte_obj_reint$bdpt10)
+
+expr <- df %>% 
+  group_by(bdpt10) %>% 
+  summarise(mean = ExpMean(Pck1),
+            std = ExpSD(Pck1),n=n())
+expr$se <- expr$std/sqrt(expr$n)
+expr$X <- as.numeric(substring(expr$bdpt10,4))-1
+expr$geno <- substring(expr$bdpt10,1,2)
+expr$pct <- 1
+expr$sepct <- 1
+expr[expr$geno=='WT',]$pct <- expr[expr$geno=='WT',]$mean/sum(expr[expr$geno=='WT',]$mean)
+expr[expr$geno=='KO',]$pct <- expr[expr$geno=='KO',]$mean/sum(expr[expr$geno=='KO',]$mean)
+expr[expr$geno=='WT',]$sepct <- expr[expr$geno=='WT',]$se*expr[expr$geno=='WT',]$pct/expr[expr$geno=='WT',]$mean
+expr[expr$geno=='KO',]$sepct <- expr[expr$geno=='KO',]$se*expr[expr$geno=='KO',]$pct/expr[expr$geno=='KO',]$mean
+expr[expr$geno=='WT',]$geno <- "CON"
+expr[expr$geno=='KO',]$geno <- "L-KO"
+write.csv(expr,"Pck1_10bin_DPT.csv")
+ggplot(expr,aes(x=X,y=pct,group_by=geno,color))+ geom_ribbon(data=expr[expr$geno=='CON',],aes(x = X,ymin = pct-sepct, ymax = pct+sepct,fill = "CON"),alpha=0.5, inherit.aes = FALSE)+ geom_ribbon(data=expr[expr$geno=='L-KO',],aes(x = X,ymin = pct-sepct, ymax = pct+sepct,fill = "L-KO"),alpha=0.5, inherit.aes = FALSE)+scale_fill_manual(name="Genotype",breaks=c("CON","L-KO"),values = c("L-KO"="#52D6F4","CON"="#8F0009"))+geom_line(data=expr[expr$geno=='CON',],color="#8F0009")+geom_line(data=expr[expr$geno=='L-KO',],color="#52D6F4")+ggtitle("Pck1")
+
+
+expr <- df %>% 
+  group_by(bdpt10) %>% 
+  summarise(mean = ExpMean(G6pc),
+            std = ExpSD(G6pc),n=n())
+expr$se <- expr$std/sqrt(expr$n)
+expr$X <- as.numeric(substring(expr$bdpt10,4))-1
+expr$geno <- substring(expr$bdpt10,1,2)
+expr$pct <- 1
+expr$sepct <- 1
+expr[expr$geno=='WT',]$pct <- expr[expr$geno=='WT',]$mean/sum(expr[expr$geno=='WT',]$mean)
+expr[expr$geno=='KO',]$pct <- expr[expr$geno=='KO',]$mean/sum(expr[expr$geno=='KO',]$mean)
+expr[expr$geno=='WT',]$sepct <- expr[expr$geno=='WT',]$se*expr[expr$geno=='WT',]$pct/expr[expr$geno=='WT',]$mean
+expr[expr$geno=='KO',]$sepct <- expr[expr$geno=='KO',]$se*expr[expr$geno=='KO',]$pct/expr[expr$geno=='KO',]$mean
+expr[expr$geno=='WT',]$geno <- "CON"
+expr[expr$geno=='KO',]$geno <- "L-KO"
+write.csv(expr,"G6pc_10bin_DPT.csv")
+ggplot(expr,aes(x=X,y=pct,group_by=geno,color))+ geom_ribbon(data=expr[expr$geno=='CON',],aes(x = X,ymin = pct-sepct, ymax = pct+sepct,fill = "CON"),alpha=0.5, inherit.aes = FALSE)+ geom_ribbon(data=expr[expr$geno=='L-KO',],aes(x = X,ymin = pct-sepct, ymax = pct+sepct,fill = "L-KO"),alpha=0.5, inherit.aes = FALSE)+scale_fill_manual(name="Genotype",breaks=c("CON","L-KO"),values = c("L-KO"="#52D6F4","CON"="#8F0009"))+geom_line(data=expr[expr$geno=='CON',],color="#8F0009")+geom_line(data=expr[expr$geno=='L-KO',],color="#52D6F4")+ggtitle("G6pc")
 ```
