@@ -1,6 +1,5 @@
 ---
 title: "TCF_Final"
-author: "William P. O'Connor
 output: html_document
 date: "2024-08-30"
 ---
@@ -35,6 +34,7 @@ suppressPackageStartupMessages(library(cowplot))
 library(fgsea)
 library(dplyr)
 library(ggh4x)
+library(limma)
 #library(RColorBrewer)
 
 ```
@@ -471,7 +471,6 @@ meta <- sub_obj@meta.data[c('seurat_clusters','perturbation')]
 exp_df <- sub_obj@assays$RNA@data[,] %>% as.matrix() %>% t() %>% as.data.frame()
 df <- merge(meta, exp_df, by = 0)
 genes <- rownames(sub_obj)
-rm(sub_obj,seurat_integrated)
 
 # run t tests
 ## WT PC vs PP
@@ -775,8 +774,15 @@ sum(!is.na(zg$gene))/sum(rowSums(hepatocyte_obj_reint@assays$RNA@data)>0)
 ```
 
 ```{r F2F}
-zg <- read.csv("sigzonatedgenes_012_correctdpt.csv")
+dpt_vals <- hepatocyte_obj_reint$dpt
+hepatocyte_obj_reint$dpt <- ((dpt_vals-min(dpt_vals))/(max(dpt_vals)-min(dpt_vals)))#-+1
+hepatocyte_obj_reint$dpt <- hepatocyte_obj_reint$dpt*8
+hepatocyte_obj_reint$binneddptgeno <- as.factor(paste0(hepatocyte_obj_reint$perturbation,"_",ceiling(hepatocyte_obj_reint$dpt)))
+table(hepatocyte_obj_reint$binneddptgeno)
+hepatocyte_obj_reint@meta.data$binneddptgeno[which(hepatocyte_obj_reint@meta.data$binneddptgeno == "KO_0")] <- "KO_1" # moves the one cell in bin KO_1 to KO_2
+table(hepatocyte_obj_reint$binneddptgeno)
 
+zg <- read.csv("sigzonatedgenes_012_correctdpt.csv")
 zonatedgenes <- intersect(zg$gene,row.names(hepatocyte_obj_reint@assays$RNA@data))
 meta <- hepatocyte_obj_reint@meta.data
 exp_df <- hepatocyte_obj_reint@assays$RNA@data[zonatedgenes,] %>% t() %>% as.data.frame() # %>% as.matrix() #
@@ -829,10 +835,11 @@ phm <- pheatmap(heatmapm,
          border_color = NA,
          cutree_rows = 4,
          labels_col = " ",
+         treeheight_row=100,
          annotation_names_row = F,
-        main = "WT                              KO",
-        filename = "zonated_binned_dpt_evenbins_correctgenes_heatmap_012_4.png",
-         width = 7, height = 12,legend=T)
+         main = "WT                              KO",
+         filename = "zonated_binned_dpt_evenbins_correctgenes_heatmap_012_4.png",
+         width = 15, height = 12,legend=T)
 
 
 heatmap$cluster <- cutree(phm$tree_row, k = 4)
@@ -857,6 +864,1028 @@ combined2[combined2$cluster==4,2] <- "D"
 table(combined$cluster)
 
 combined2%>%write_csv("clusteredsigzonatedgenes_evenbins_correctgenes.csv")
+```
+
+```{r bcatColnotlists}
+str1 <- "Adh4
+Aldh3a2
+Aox1
+Amacr
+Aqp9
+Ahr
+Abcb4
+Abcc12
+Abcc2
+Abcc4
+Ces1g
+Cyp1a1
+Cyp1a2
+Cyp2a5
+Cyp2d40
+Cyp2e1
+Cyp27a1
+Fmo1
+Fmo2
+Gsta3
+Gsta4
+Gstm3
+Gstm6
+Nfe2l2
+Nr1i3
+Por
+Pon1
+Gstm2
+Cyb5b
+Gsr
+Gstm1
+Slc10a2
+Slc22a1
+Xdh
+Npc1
+Stard4
+Tmem97
+Bdh1
+Oxct1
+Abhd4
+Aldh1a1
+Dgkd
+Elovl7
+Fabp12
+Lipg
+Mogat2
+Osbpl8
+Plbd1
+Plekha8
+Gpcpd1
+Rdh9
+Slc37a2
+Sort1
+Usp2
+Vldlr
+Crls1
+Cept1
+Napepld
+Pgs1
+Ptdss1
+Pla2g6
+Pla2g12a
+Cerk
+Col4a3bp
+Asah1
+Serinc5
+Sptlc2
+Sgms1
+Sphk2
+S1pr1
+Azin1
+Bckdhb
+Car2
+Glul
+Oat
+Rhbg
+Slc7a5
+Slc1a2
+Slc1a4
+Slc1a5
+Slc16a10
+Slc25a22
+Nt5c2
+Adcy6
+Adss
+Entpd5
+Fignl1
+Gda
+Npr2
+Pde2a
+Pde4b
+Pde4d
+Slc28a1
+Pfkfb2
+Atp6v1b2
+Cs
+Dlat
+Idh2
+Idh3a
+L2hgdh
+Ldhb
+Ldhd
+Pdk4
+Lhpp
+Slc13a3
+Slc25a13
+Aspscr1
+Pygb
+Glb1
+Gba2
+Gys2
+Myorg
+Sord
+Cbr3
+Hsdl2
+Nhlrc2
+Prdx1
+Prdx3
+Selenoh
+Srxn1
+Alad
+Blvrb
+Cpox
+Galk2
+Gne
+Slc35a3
+Slc35b4
+Gulo
+Pdxk
+Slc19a2
+Phospho2
+Dse
+Manba
+Pign
+Galnt10
+Galntl4
+Hpgd
+Tbxas1
+Papss2
+Cln6
+Clcn5
+Mfsd7c
+Mmgt2
+P2ry6
+Scn4b
+Slc16a12
+Slc16a7
+Slc22a23
+Slc25a21
+Slc30a1
+Slc4a4
+Slc41a3
+Snx2
+Snx5
+Trpv2
+Vat1
+Haus8
+Afp
+Anapc4
+Anln
+Aspm
+Aurka
+Aurkb
+Brca1
+Cd2ap
+Cdc42se1
+Caprin1
+Cdc20
+Cdc27
+Cdc42
+Cdca2
+Cdca3
+Cetn3
+Cenpf
+Cenpl
+Cenpn
+Cenpt
+Cep192
+Ccnd1
+Cdkn1c
+Cdkn3
+Dbf4
+Dis3l2
+Dcbld2
+Dclre1a
+Prim1
+Espl1
+Gtse1
+Gsg2
+Kif11
+Kif20b
+Kifap3
+Lmln
+Mcm4
+Mcm6
+Nek2
+Ncapd2
+Ncapg
+Ncaph
+Nusap1
+Nubp1
+Plk1
+Plk2
+Polk
+Ska2l
+Esco1
+Ccnb1
+Pkmyt1
+Prc1
+Rec8
+Rpa1
+Hjurp
+Rbms1
+Sik1
+Spag5
+Topbp1
+Tacc3
+Troap
+Ube2c
+Wee1
+Csf1
+Pdgfc
+Tgfa
+Aifm1
+Aifm2
+Atad5
+Bax
+Bcl2l1
+Bcl2l11
+Bcl2l14
+Casp8
+Dap
+Dapk2
+Endod1
+Niacr1
+Phlda1
+Serinc3
+Mcl1
+Shf
+Tnfaip8l1
+Ptpn6
+Ptprd
+Ptprg
+Hipk2
+Abi2
+Mertk
+Dusp6
+Dyrk3
+Lrrk1
+Mapkapk2
+Mapk7
+Map2k6
+Map3k13
+Map3k5
+Map4k4
+Mlkl
+Mdfic
+Mylk
+Mtmr6
+Ntrk2
+Nuak2
+Pim1
+Taok3
+Trpm7
+Wnk4
+Tlr12
+Tifa
+Trim8
+Tnfaip3
+Relb
+Rel
+Amigo2
+Amica1
+Cblb
+Cxcl10
+Cxcl2
+Cx3cl1
+Golm1
+Hcls1
+H2-Q1
+Irf1
+Irf8
+Il1rl2
+Il1r1
+Il15
+Il22ra1
+Jam2
+Lect2
+Pik3ap1
+Pag1
+Patz1
+Hsp90aa1
+Sh3bp2
+Pias3
+Cxcl11
+Sla
+Socs3
+Tapbp
+Tox
+Traf4
+Traf3ip2
+Tnfrsf19
+Zc3hav1
+Axin2
+Bcl9l
+Cacybp
+Csnk1e
+Daam1
+Dixdc1
+Fosl1
+Fzd7
+Lgr5
+Lef1
+Nkd1
+Nlk
+Notum
+Ppap2b
+Tspan12
+Tcf7
+Tsku
+Arf6
+Arl13b
+Acap2
+Agfg2
+Bcar3
+Dennd5a
+Dennd5b
+Dab2ip
+Ect2
+Igtp
+Iqgap2
+Mras
+Net1
+Rasip1
+Rasal2
+Rasgrf2
+Rasl11b
+Rasd1
+Rnd3
+Arhgap17
+Arhgap18
+Arhgef19
+Asap1
+Srgap3
+Tbc1d1
+Adrb2
+Agtr1a
+Arrb2
+Atp2b2
+Bmp7
+Cib2
+Depdc1b
+Dnajc9
+Egln3
+Fgfrl1
+Gpr116
+Gpr98
+Gnai2
+Gng12
+Homer2
+Hcrtr2
+Ihh
+Inhbe
+Inhbc
+Irs1
+Igf2r
+Il17rd
+Mrvi1
+Nrg1
+Pik3r1
+Plcb1
+Dnaja1
+Calm1
+Prkch
+Ptplad1
+Rab11fip2
+Rab4a
+Rin3
+Max
+Sorbs3
+Spred1
+Them4
+Wwc1
+Gpr182
+Atad2
+Zfp322a
+Wwtr1
+Rere
+Dnmt1
+H2afz
+Hdac2
+Phf15
+Pbrm1
+Rbl1
+Nap1l1
+Usp22
+Uhrf1
+Whsc1
+Ezh2
+Nrip1
+Suz12
+Zfp13
+Atf3
+Arid1b
+Bhlhe40
+Bclaf1
+Cbx4
+Cbx5
+Ets2
+Elf3
+Fosb
+Gata3
+Grhl1
+Hlf
+Smad1
+Smad5
+Mybl1
+Nkx1-2
+Nr1d2
+Olig1
+Per1
+Per2
+Rara
+Pbx3
+Tbx3
+Tef
+Sp5
+Tcf12
+Tcf4
+Zkscan3
+Tcea3
+Ccdc101
+Csda
+Lhx6
+Phf20
+Pold3
+Ptrf
+Prdm4
+Hmgn1
+Rqcd1
+Rnf14
+Mafg
+Gtf2a2
+Maff
+Ang
+Rnase4
+Cpeb1
+Ddx39
+Exosc9
+Hnrnpd
+Rbm17
+Pus10
+Rbm22
+Rbm9
+Rod1
+Nup93
+Aars
+Denr
+Eif2ak4
+Eif2b4
+Gars
+Impact
+Lgtn
+Samd4
+Arpc1b
+Jub
+Actr2
+Bcam
+Nat8
+Cml5
+Cd164
+Cgnl1
+Cotl1
+Cfl1
+Col12a1
+Dchs1
+Dstn
+Eln
+Efna4
+Epb4.1l1
+Fmnl1
+Gas7
+Hmmr
+Igsf11
+Itgav
+Icam1
+Kif1b
+Kif5b
+Limk1
+Mmp24
+Mcam
+Magi3
+Mpzl1
+Myo1g
+Myo9b
+Myo5b
+Myo7b
+Palmd
+Arpc5
+Myl12b
+Tpm3
+Plod1
+Robo1
+Sema3b
+Sema3f
+Dynll1
+Stab2
+Myo1c
+Spnb1
+Stard9
+Tpx2
+Tbcel
+Tppp
+Ttll11
+Tubb5
+Wisp2
+Fem1b
+Usp12
+Usp14
+Usp18
+Usp20
+Usp46
+Ube2e2
+Adamts17
+Rnpep
+Cast
+Cpm
+Dpp4
+Enc1
+Fbxo45
+Habp2
+Rnf43
+Dcun1d1
+Anxa7
+Csrp2
+Cys1
+Ehd4
+Rtl1
+Epb4.1l5
+Exoc6
+Fkbp1a
+Fut8
+Gmfb
+Grpel2
+Hspb6
+Lmna
+Nphp1
+Nek8
+Narf
+Pex13
+Pitpnm2
+Pros1
+Pcp4l1
+Tpr
+Stx1b
+Sntb1
+Trak2
+Tgm1
+Ywhaz
+Unc13b
+Zcchc11
+Zcchc6
+Abhd12
+Ankrd56
+Armc8
+Btnl9
+Arpp19
+Gstp3
+Hrob
+Coq10a
+Ccdc157
+Dhx32
+D10Wsu52e
+Airn
+Knstrn
+D6Wsu116e
+Dym
+Efr3b
+Etl4
+C630043F03Rik
+Lrrc75aos2
+Gm16984
+D630024D03Rik
+1110028F11Rik
+2500002B13Rik
+Tbx3os1
+Gm13872
+4732463B04Rik
+Gm13571
+A930001C03Rik
+3010003L21Rik
+Etohd2
+Rian
+Emp2
+Epb4.1l4b
+Rimoc1
+Fbxw9
+Fam102a
+Fam107b
+Fam110b
+Fam20c
+Fam82a1
+Fhad1
+Fktn
+Greb1
+Gcap14
+Hdhd3
+Hn1
+2310028H24Rik
+Fam89a
+Iffo2
+Klhl8
+Leprotl1
+Lrrc45
+Ly6c1
+Msmp
+Mmrn2
+Myom3
+Nbeal1
+Nav2
+Nptx1
+Pdzrn3
+Pde4dip
+Plac8
+Pdgfrl
+Plekha7
+Phldb2
+Gm129
+Gm5158
+Ptplb
+Paqr4
+Prr11
+Prom1
+Pdilt
+Reep1
+Rell1
+1190005I06Rik
+1300014I06Rik
+Chp1
+2010002N04Rik
+2200001I15Rik
+2310030N02Rik
+Mkrn2os
+Rmdn2
+4930420K17Rik
+4931406C07Rik
+4933429F08Rik
+5830403L16Rik
+6430548M08Rik
+Mir670hg
+Rnf38
+Rufy2
+Sec14l1
+Secisbp2l
+Sdccag1
+Efhd2
+Znrf3
+Qk
+Prr18
+Spats2
+Tex2
+Tex264
+Ttc14
+Ttc38
+Thumpd1
+Tmem106a
+Tmem184b
+Tmem50b
+Dram2
+Tmem86a
+Trim47
+Zfp334
+Zfp768
+Zfp81"
+
+str2 <- "F11
+F7
+Fga
+Fgb
+Fgg
+Cpb2
+Ggcx
+Kng1
+Arg1
+Asl
+Ass1
+Cps1
+Otc
+Afmid
+Amdhd1
+Aspg
+Ccbl1
+Ftcd
+Gls2
+Haao
+Hal
+Inmt
+Kynu
+Mccc2
+Sardh
+Tdo2
+Uroc1
+Agxt2l1
+Got1
+Aqp8
+Cbs
+Cth
+Gldc
+Gm4952
+Prodh2
+Qdpr
+Slc22a7
+Slc3a1
+Car14
+Car3
+Acacb
+Acly
+Acsl1
+Acss2
+Angptl3
+Angptl4
+Aqp4
+Elovl2
+Elovl5
+Fetub
+Lpin1
+Pecr
+Scap
+Scd1
+Slc27a5
+Slc37a1
+Tff3
+Bdh2
+Hsd17b13
+Lmf1
+Alb
+Apoa4
+Apoa5
+Apoc2
+Apoc3
+Apon
+Slc10a1
+Ces1e
+Ces2a
+Ces3a
+Ces4a
+Cyp17a1
+Cyp3a25
+Cyp46a1
+Cyp7b1
+Cyp8b1
+Dhrs9
+Hsd11b1
+Hsd17b2
+Hsd17b6
+Retsat
+Sdr42e1
+Ugt3a1
+Osbp2
+Agpat2
+Chka
+Dak
+Gm2a
+Ptgds
+Slco2a1
+Agxt
+Fbp1
+G6pc
+Grhpr
+Pck1
+Sds
+Sdsl
+Slc37a4
+Cisd1
+Cyb561
+Slc25a47
+Ak3l1
+Aldob
+Khk
+Ppp1r3c
+Abca8a
+Abcc3
+Aldh1b1
+Cyp2b10
+Cyp2b23
+Cyp2f2
+Cyp2j5
+Cyp4a12a
+Mosc1
+Slc16a6
+Sult5a1
+Prxl2a
+Aldh1l1
+Rdh16f2
+Ggt7
+H6pd
+Pyroxd2
+Slc25a32
+Cat
+Gdf15
+Hao1
+5033411D12Rik
+Ethe1
+Hebp1
+Pde4c
+Tymp
+Uox
+Hamp2
+Pzp
+Serpina1a
+Serpina1b
+Serpina1c
+Serpina1d
+Serpina1e
+Serpina3k
+Serpina3n
+Serpina4-ps1
+Serpina9
+Serpina11
+Serpina12
+Serpinf1
+Serpinf2
+Serpinb1a
+Col15a1
+Col27a1
+Col5a3
+Gpc1
+Itih3
+Man2a2
+Pcsk6
+Sdc4
+Sspo
+St3gal5
+St6gal1
+Lad1
+Cdh1
+Cldn1
+Fam129b
+Igfals
+Lama3
+Arhgap10
+Arhgap24
+Plxna2
+Rarres1
+Shroom1
+Svil
+Xirp1
+Celsr1
+Efna3
+Loxl4
+Bmp4
+Bmper
+Grem2
+Ltbp2
+Nedd4l
+Smad9
+Ddit4
+Egfr
+Evc
+Fgfr2
+Gpr12
+Hgfac
+Mmd2
+Plch2
+Rgs7
+St5
+Ulk1
+Arntl
+Bhlha15
+Mbd1
+Mycl1
+Nfil3
+Npas2
+Gnmt
+1100001G20Rik
+AI182371
+C4a
+C8a
+C8b
+Cfb
+Cfh
+Ceacam1
+Fam46c
+Nlrp12
+Pigr
+Prtn3
+Raet1a
+Rnf125
+Apcs
+Bcl6
+Chac1
+Dapk1
+Gas2
+Htra4
+Igfbp1
+Mt1
+Mt2
+Cables1
+Cdkn1a
+Inca1
+Igf1
+Igfbp2
+5430407P10Rik
+Acpp
+Adck5
+Dclk3
+Adam11
+Asb2
+Josd2
+Prepl
+Wsb1
+Agt
+B3galt1
+Chrna4
+Creld2
+Derl3
+Enpp2
+Herpud1
+Keg1
+Mcart1
+Plbd2
+Scnn1a
+Sfxn1
+Slc15a5
+Slc30a10
+Slc41a2
+Slc6a12
+Syne1
+Syvn1
+Tars
+Tmem205
+Tmie
+Tpst1
+Tspan33
+1810046K07Rik
+Hectd2os"
+```
+
+```{r F2F}
+pw <- c(c(str_split(str1,'\n')),c(str_split(str2,'\n')))
+names(pw)[[length(pw)-1]] <- "colup"
+names(pw)[[length(pw)]] <- "coldown"
+#https://ftp.ncbi.nlm.nih.gov/gene/DATA/GENE_INFO/Mammalia/
+Mm <- read.delim("Mus_musculus.gene_info.gz",sep="\t")
+Cols <- c("Synonyms","Symbol")
+x <- alias2SymbolUsingNCBI(unlist(pw), Mm, required.columns=Cols)
+x$pwgene <- unlist(pw)
+
+syn <- strsplit(x$Synonyms,split="[|]")
+names(syn) <- x$Symbol
+for (i in seq(length(x$Symbol))){
+  if(syn[[i]][1]=="-"){
+    syn[[i]] <- x$Symbol[i]
+  }
+  else{
+    syn[[i]] <- append(x$Symbol[i],syn[[i]])
+  }
+}
+
+x$hepname <- x$pwgene
+x[!(x$pwgene%in%row.names(hepatocyte_obj_reint)),"hepname"] <- NA
+
+# sum(is.na(x$hepname))
+for (i in x[is.na(x$hepname),"Symbol"]){
+  #print(paste("outer",i))
+  for (j in seq(length(syn[i][[1]]))){
+    #print(paste("inner",j))
+    if (syn[i][[1]][j]%in%row.names(hepatocyte_obj_reint)){
+      x[x$Symbol==i,"hepname"] <- syn[i][[1]][j]
+      break
+    }
+  }
+}
+# sum(is.na(x$hepname))
+x[is.na(x$hepname),"hepname"] <- x[is.na(x$hepname),"pwgene"]#all 11 genes not in hep obj use initial name
+x$pathway <- ""
+x[x$pwgene%in%pw[[1]],"pathway"] <- "up"
+x[x$pwgene%in%pw[[2]],"pathway"] <- "down"
+z <- pivot_wider(x[,c(4,5)],names_from = pathway,values_from = hepname)
+#z$up
+pathways <- c(z$up,z$down)
+names(pathways) <- c("up","down")
+zg <- read_csv("clusteredsigzonatedgenes_evenbins_correctgenes.csv")
+cA <- zg[zg$cluster=='A',]$gene
+cB <- zg[zg$cluster=='B',]$gene
+cC <- zg[zg$cluster=='C',]$gene
+cD <- zg[zg$cluster=='D',]$gene
+zglist <- list(cA,cB,cC,cD)
+names(zglist) <- c("A","B","C","D")
+
+univ <- union(row.names(hepatocyte_obj_reint),unique(unlist(pathways)))
+#setdiff(unique(unlist(pathways)),row.names(hepatocyte_obj_reint))
+pathways$up[duplicated(pathways$up)]
+fgsea_oracolnot <- lapply(seq_along(zglist), function(i) {
+  fora(pathways = pathways,
+       genes = zglist[[i]], # genes in cluster i
+       universe = univ, # all genes in object or pathways = 21616
+       minSize = 1, 
+       maxSize = 2001) %>% 
+    mutate(cluster = names(zglist)[i]) # add cluster column
+}) %>% 
+  data.table::rbindlist() %>% # combine tables
+  #filter(padj < 0.05) %>%
+  arrange(cluster, padj)
+
+
+# create dot plots
+fgsea_oracolnot$`Overlap %`<-100*fgsea_oracolnot$overlap/fgsea_oracolnot$size
+fgsea_oracolnot$pathway <- factor(fgsea_oracolnot$pathway, levels = c("up", "down"))
+fgsea_oracolnot$cluster <- factor(fgsea_oracolnot$cluster, levels = c("A", "B", "C", "D"))
+fgsea_oracolnot$csize <- NA
+fgsea_oracolnot[fgsea_oracolnot$cluster=="A","csize"] <- length(zglist[[1]])
+fgsea_oracolnot[fgsea_oracolnot$cluster=="B","csize"] <- length(zglist[[2]])
+fgsea_oracolnot[fgsea_oracolnot$cluster=="C","csize"] <- length(zglist[[3]])
+fgsea_oracolnot[fgsea_oracolnot$cluster=="D","csize"] <- length(zglist[[4]])
+fgsea_oracolnot$`Cluster Overlap %` <- 100*fgsea_oracolnot$overlap/fgsea_oracolnot$csize
+
+ggplot(fgsea_oracolnot,aes(x=cluster,y=pathway))+geom_point(aes(size=`Cluster Overlap %`,color=-log10(padj)))+theme_classic()+labs(title=element_blank(),y=element_blank(),x=element_blank())+theme(axis.text = element_blank(),axis.line = element_line(colour = 'black', size = 0.7),axis.ticks = element_line(colour = 'black', size = 0.7),axis.ticks.length = unit(0,"cm"))#+theme(panel.grid = element_line(color = "gray",size = 0.75,linetype = 2),panel.background = element_rect(fill = "white"))
+ggsave("colnotdotplotclusteroverlap.png",width=3,height=3)
 ```
 
 ## Glutamine/Glutamate Heatmap
