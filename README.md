@@ -78,7 +78,7 @@ Creates 8 DPT bins and plots heatmap of all significantly zonated genes clustere
 Saves modules with gene names for use with Enrichr. 
 
 ### Chunk 25: bcatColnotlists
-Reads in lists of [$\beta$-Catenin regulated genes](https://aasldpubs.onlinelibrary.wiley.com/doi/pdf/10.1002/hep.26924).
+Reads in lists of $\beta$[-Catenin regulated genes](https://aasldpubs.onlinelibrary.wiley.com/doi/pdf/10.1002/hep.26924).
 
 ### Chunk 26: F2G
 Performs a hypergeometric test on each module with both $\beta$-Catenin lists. 
