@@ -5,6 +5,7 @@ Adjusts maximum size, sets seed, and loads required packages.
 
 ### Chunk 2: functions
 merge.matrices() - Merges matrices by row names.
+
 findgenes() - Search Seurat object for genes starting with specific string
 
 ## Whole Liver
